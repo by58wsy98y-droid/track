@@ -44,7 +44,7 @@ debt-free date) is worked out automatically.
 | `manifest.webmanifest` | PWA | Name "Harbor", `start_url: "./"`, `scope: "./"`, `display: "standalone"`, icons. |
 | `icons/` | PWA | `icon.svg`, `apple-touch-icon.png` (180), `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`. |
 | `.nojekyll` | PWA | Empty file so GitHub Pages serves files as-is. |
-| `tests/engine.test.js` | Engine | `node --test tests/` unit tests. |
+| `tests/engine.test.js` | Engine | Unit tests: `node --test tests/engine.test.js`. |
 | `tests/e2e.test.js` | Integration | Playwright end-to-end run (see §9). |
 
 UMD pattern for engine.js / visuals.js:
@@ -485,10 +485,14 @@ Money shows with the user's currency via `Intl.NumberFormat('en-US', {style:'cur
   6. "Keep a backup in iCloud Drive or Files — we'll remind you once a month."
 
 ## 9. Testing
-- `node --test tests/` must pass (engine unit tests, incl. the worked examples below).
+- `node --test tests/engine.test.js` must pass (engine unit tests, incl. the worked examples below).
+  (Node 22 does not expand a bare folder argument, so `node --test tests/` does not work.)
 - `tests/e2e.test.js` (Playwright; run with `NODE_PATH=$(npm root -g) node --test tests/e2e.test.js`): serves the repo
-  with a tiny static server on a random port, runs iPhone 13 and iPad (gen 7) viewports: setup → payday → ticks →
-  check-in → backup (download) → restore → offline reload (service worker) → no console errors.
+  under `/track/` (like GitHub Pages) with a tiny static server on a random port, runs iPhone 13 and iPad (gen 7)
+  contexts: setup → payday (P1) → ticks → reload → welcome-home recap (once) → payday (P2) → Voyage/Settings →
+  check-in → tight payday + undo → backup (download) → start over → restore → offline reload (service worker;
+  the server also drops connections, because Chromium's offline emulation doesn't reach service-worker fetches)
+  → no console errors.
 
 ### Worked examples (must be unit tests)
 Settings: boatDate `2026-09-08`, 28/14, pay 2000 biweekly, homeSpend 1400 ($100/day), boatSpend 280 ($10/day),

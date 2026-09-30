@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Harbor</title>
+  <meta name="description" content="Your simple money coach: what to do with each paycheck, and your progress to debt-free.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F2F6F9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A1628" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Harbor">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./engine.js"></script>
+  <script defer src="./visuals.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <div id="banner"></div>
+  <main id="app" tabindex="-1">
+    <div class="boot">
+      <p class="boot-title">⚓ Harbor</p>
+      <p class="muted">Getting your plan ready…</p>
+    </div>
+  </main>
+  <nav id="tabs" aria-label="Main" hidden></nav>
+  <div id="layers"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="restore-file" accept=".json,application/json,text/plain" hidden>
+  <noscript><p class="boot">Harbor needs JavaScript turned on to work.</p></noscript>
+  <script>
+    // Offline support. Fails silently (e.g. when sw.js is missing or the browser has no service workers).
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        try {
+          navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' }).catch(function () {});
+        } catch (e) { /* ignore */ }
+      });
+    }
+  </script>
+</body>
+</html>
