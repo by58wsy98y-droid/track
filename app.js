@@ -227,6 +227,7 @@
     why: {},
     flow: null,
     saveError: false,
+    safariLater: false,   // "Later" on the Safari-tab reminder: this launch only
   };
 
   // ------------------------------------------------------------------ icons
@@ -345,17 +346,24 @@
   function checklistHTML(pd) {
     const items = (pd.plan.items || []).filter(function (it) { return it.amount > 0; });
     if (!items.length) return '<p class="muted">Nothing to do for this one.</p>';
+    const isLatest = pd === state.paydays[state.paydays.length - 1];
     return '<ul class="checklist">' + items.map(function (it) {
       const on = !!(pd.ticks && pd.ticks[it.key]);
       const wk = pd.id + '|' + it.key;
       const open = !!ui.why[wk];
       const whyId = 'why-' + pd.id + '-' + it.key.replace(/[^\w-]/g, '_');
-      return '<li class="item"><div class="item-row">' +
-        '<button type="button" class="tick" role="checkbox" aria-checked="' + on + '" data-action="tick" data-pd="' + esc(pd.id) +
-        '" data-key="' + esc(it.key) + '" data-fk="t:' + esc(wk) + '">' +
-        '<span class="box">' + ICON.check + '</span>' +
-        '<span class="item-text"><span class="item-label">' + esc(it.label) + '</span>' +
-        (it.sub ? '<span class="item-sub">' + esc(it.sub) + '</span>' : '') + '</span></button>' +
+      // An older payday's undone debt/savings step: the next plan already re-planned that money.
+      const moved = !isLatest && !on && (it.kind === 'debt' || it.kind === 'save');
+      const main = moved
+        ? '<div class="tick is-moved"><span class="box" aria-hidden="true">–</span>' +
+          '<span class="item-text"><span class="item-label">' + esc(it.label) + '</span>' +
+          '<span class="item-sub">Moved to your next payday</span></span></div>'
+        : '<button type="button" class="tick" role="checkbox" aria-checked="' + on + '" data-action="tick" data-pd="' + esc(pd.id) +
+          '" data-key="' + esc(it.key) + '" data-fk="t:' + esc(wk) + '">' +
+          '<span class="box">' + ICON.check + '</span>' +
+          '<span class="item-text"><span class="item-label">' + esc(it.label) + '</span>' +
+          (it.sub ? '<span class="item-sub">' + esc(it.sub) + '</span>' : '') + '</span></button>';
+      return '<li class="item' + (moved ? ' is-moved' : '') + '"><div class="item-row">' + main +
         '<button type="button" class="why-btn" aria-expanded="' + open + '" aria-controls="' + whyId + '" data-action="why" data-wk="' + esc(wk) +
         '" data-fk="w:' + esc(wk) + '">why?</button></div>' +
         (open ? '<div class="why" id="' + whyId + '">' + esc(it.why || '') + (it.kind === 'bills' ? billsListHTML(pd.plan) : '') + '</div>' : '') +
@@ -427,8 +435,8 @@
           '<p class="hint-title">📲 Add Harbor to your Home Screen first, then set up there.</p>' +
           '<p>Your ' + device + ' keeps the Home Screen app\'s data separate from Safari.</p>' +
           (ui.hintOpen ? '<ol class="hint-steps">' +
-            '<li>Tap the <b>Share</b> button (the square with an arrow ↑).</li>' +
-            '<li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li>' +
+            '<li>Tap <b>Share</b> ↑ (on iPhone you may need to tap ••• first).</li>' +
+            '<li>Tap <b>Add to Home Screen</b>, keep <b>Open as Web App</b> on, then tap <b>Add</b>.</li>' +
             '<li>Open Harbor from its new icon and set up there.</li></ol>' : '') +
           '<div class="btn-row">' +
           '<button type="button" class="btn btn-soft" data-action="hintToggle" aria-expanded="' + ui.hintOpen + '">' + (ui.hintOpen ? 'Got it' : 'How?') + '</button>' +
@@ -540,7 +548,7 @@
       const steps = [
         'Build a ' + money(state.settings.cushion) + ' starter cushion.',
         hasDebts ? 'Crush your debts one at a time.' : 'No debts to crush — you get to skip this one!',
-        'Grow a full safety net.',
+        'Grow your savings to cover ' + plural(state.settings.safetyMonths || 3, 'month') + ' of bills and spending.',
       ];
       return setupFrame({
         emoji: '⚓', title: 'You\'re all set', lead: 'Here\'s your plan, in 3 steps:',
@@ -688,7 +696,7 @@
 
   function renderToday() {
     const s = summary();
-    return '<h1 class="sr-only">Today</h1>' + bannerHTML(s) + nextCardHTML(s) + progressCardHTML(s);
+    return '<h1 class="sr-only">Today</h1>' + bannerHTML(s) + '<div class="today-grid">' + nextCardHTML(s) + progressCardHTML(s) + '</div>';
   }
 
   function bannerHTML(s) {
@@ -699,20 +707,36 @@
       (s.rotation ? '<span class="banner-go" aria-hidden="true">Change</span>' : '<span class="chev" aria-hidden="true">›</span>') + '</button>';
   }
 
+  // At most one reminder, in priority order: Safari tab, backup, check-in.
   function remindersHTML(s) {
     let h = '';
-    if (s.checkinDue) {
-      h += '<div class="remind"><span class="remind-text">🔎 Monthly check-in<small>30 seconds</small></span>' +
+    if (IS_APPLE && !isStandalone() && state.setupDone && !ui.safariLater) {
+      h = '<div class="remind remind-safari"><span class="remind-text">📲 Harbor is open in Safari<small>Safari can erase it if you don\'t open it for a week.</small></span>' +
+        '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="safariHow">How?</button>' +
+        '<button type="button" class="btn btn-text btn-small" data-action="safariLater">Later</button></span></div>';
+    } else if (s.backupDue) {
+      const last = state.meta.lastBackupAt ? fdate(state.meta.lastBackupAt) : 'never';
+      h = '<div class="remind"><span class="remind-text">💾 Back up your data<small>Last: ' + esc(last) + '</small></span>' +
+        '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="backup">Back up</button>' +
+        '<button type="button" class="btn btn-text btn-small" data-action="snoozeBackup">Later</button></span></div>';
+    } else if (s.checkinDue) {
+      h = '<div class="remind"><span class="remind-text">🔎 Monthly check-in<small>30 seconds</small></span>' +
         '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="checkin">Start</button>' +
         '<button type="button" class="btn btn-text btn-small" data-action="snoozeCheckin">Not now</button></span></div>';
     }
-    if (s.backupDue) {
-      const last = state.meta.lastBackupAt ? fdate(state.meta.lastBackupAt) : 'never';
-      h += '<div class="remind"><span class="remind-text">💾 Back up your data<small>Last: ' + esc(last) + '</small></span>' +
-        '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="backup">Back up</button>' +
-        '<button type="button" class="btn btn-text btn-small" data-action="snoozeBackup">Later</button></span></div>';
-    }
     return h ? '<div class="reminders">' + h + '</div>' : '';
+  }
+
+  function openSafariSheet() {
+    const html = sheetHead('Keep Harbor safe', domId('saf')) +
+      '<ol class="safe-steps">' +
+      '<li><span class="num">1</span><div><b>Make a backup</b>' +
+      '<button type="button" class="btn btn-soft btn-small" data-la="backup">💾 Back up</button></div></li>' +
+      '<li><span class="num">2</span><div>Tap <b>Share</b> ↑ (on iPhone you may need to tap ••• first), then <b>Add to Home Screen</b>. Keep <b>Open as Web App</b> on, then tap <b>Add</b>.</div></li>' +
+      '<li><span class="num">3</span><div>Open Harbor from the new icon and tap <b>“Have a backup file? Restore it”</b>.</div></li>' +
+      '</ol>' +
+      '<div class="sheet-actions"><button type="button" class="btn btn-primary" data-la="close">Got it</button></div>';
+    openLayer(html, { focus: 'box', actions: { backup: function () { backup(); } } });
   }
 
   function nextCardHTML(s) {
@@ -726,7 +750,7 @@
         '<div class="links"><button type="button" class="link" data-action="fixPayday" data-id="' + esc(latest.id) + '">Fix amount</button>' +
         '<button type="button" class="link link-muted" data-action="undoPayday" data-id="' + esc(latest.id) + '">Undo payday</button></div>' +
         '<button type="button" class="btn btn-soft btn-again" data-action="startPayday">💰 I got paid again</button>' +
-        remindersHTML(s) + '</section>';
+        '</section>';
     }
     let title, sub;
     if (!s.nextPayday) {
@@ -746,9 +770,9 @@
       remindersHTML(s) + '</section>';
   }
 
-  function stageLine(s) {
-    if (s.stage === 4) return 'You made it to Safe Harbor ⚓';
-    return 'Stage ' + s.stage + ' of 3 · ' + s.stageName;
+  function stageLineHTML(s) {
+    if (s.stage === 4) return esc('You made it to Safe Harbor ⚓');
+    return esc('Stage ' + s.stage + ' of 3') + ' <span class="nowrap">· ' + esc(s.stageName) + '</span>';
   }
   // { text, soft }
   function goalLine(s) {
@@ -756,13 +780,18 @@
     if (s.stage === 4) return { text: 'Your safety net is full' };
     if (p.alreadyDebtFree) {
       if (!s.debts.length) {
-        return p.safeHarbor ? { text: 'Safe Harbor by ' + D.fmtMonthYear(p.safeHarbor) } : { text: 'No debts — nice!' };
+        return p.safeHarbor ? { text: 'Safe Harbor by ' + D.fmtMonthYear(p.safeHarbor) } : { text: 'No debts added', soft: true };
       }
-      return { text: 'You\'re debt-free! 🎉' };
+      return p.safeHarbor ? { text: 'Safe Harbor by ' + D.fmtMonthYear(p.safeHarbor) } : { text: 'Debt-free ✓ Now growing your safety net' };
     }
     if (p.debtFree) return { text: 'Debt-free by ' + D.fmtMonthYear(p.debtFree) };
     if (p.reason === 'no-pay') return { text: 'Add your normal paycheck in Settings to see your debt-free date', soft: true };
     return { text: 'Every payday moves you closer', soft: true };
+  }
+
+  function savedLineHTML(s) {
+    if (s.stage === 4) return '<b>' + esc(money(s.savings)) + '</b> saved';
+    return '<b>' + esc(money(s.jar.amount)) + '</b> of ' + esc(money(s.jar.target)) + (s.stage === 1 ? ' cushion' : ' safety net');
   }
 
   function progressCardHTML(s) {
@@ -770,9 +799,9 @@
     return '<section class="card progress-card" role="button" tabindex="0" data-action="go" data-to="voyage" aria-label="Your progress. Open your voyage.">' +
       V.miniRoute(s.voyage) +
       '<div class="progress-row"><div class="progress-jar">' + V.jar(s.jar, { size: 'small' }) + '</div>' +
-      '<div class="progress-text"><div class="stage-line">' + esc(stageLine(s)).split(' · ').map(function (x, i) { return i ? '<span class="nowrap">' + x + '</span>' : x; }).join(' · ') + '</div>' +
+      '<div class="progress-text"><div class="stage-line">' + stageLineHTML(s) + '</div>' +
       '<div class="goal-line' + (g.soft ? ' is-soft' : '') + '">' + esc(g.text) + '</div>' +
-      '<div class="saved-line"><b>' + esc(money(s.savings)) + '</b> saved</div></div></div>' +
+      '<div class="saved-line">' + savedLineHTML(s) + '</div></div></div>' +
       '<div class="more" aria-hidden="true">See your voyage ›</div></section>';
   }
 
@@ -885,7 +914,8 @@
 
     const jarLine = money(s.jar.amount) + ' of ' + money(s.jar.target);
     const jarSub = s.stage === 1 ? 'Starter cushion — for surprises'
-      : 'Safety net — ' + plural(state.settings.safetyMonths, 'month') + ' of expenses';
+      : s.stage === 2 ? 'Safety net — keeps growing while you crush debt'
+        : 'Safety net — ' + plural(state.settings.safetyMonths, 'month') + ' of bills and spending';
 
     let h = '<header class="voy-head"><h1 class="page-title">' + esc(title) + '</h1>' + (sub ? '<p class="voy-sub">' + esc(sub) + '</p>' : '') + '</header>' +
       '<section class="card route-card" aria-label="Your route"><div id="route-slot"></div></section>' +
@@ -999,7 +1029,7 @@
       row('restore', '📂 Restore from a backup', null) +
       '<div class="group-pad"><ul class="warn-list">' +
       warn('🔒', 'Your money info lives only on this device — nothing is sent anywhere.') +
-      warn('📲', 'Always open Harbor from its Home Screen icon. Safari and the Home Screen app keep separate data.') +
+      warn('📲', 'Open Harbor from its Home Screen icon. In a Safari tab, Safari can erase it after about a week of not opening it.') +
       warn('🗑️', 'Deleting the Harbor icon from your Home Screen deletes its data.') +
       warn('🧹', 'Clearing Safari\'s history and website data can wipe it.') +
       warn('📱', 'Your iPad and iPhone don\'t sync. Pick one, or move your data with a backup file.') +
@@ -1031,6 +1061,7 @@
     $app.innerHTML = (SCREENS[ui.screen] || renderToday)();
     renderTabs();
     document.body.classList.toggle('no-tabs', ui.screen === 'setup' || ui.screen === 'payday');
+    document.body.dataset.screen = ui.screen;
     if (ui.screen === 'voyage') fillRoute();
     refreshLayers();
     if (fk) {
@@ -1055,7 +1086,9 @@
 
   function renderBanner() {
     let h = '';
-    if (ui.saveError) {
+    if (loadProblem === 'storage' || (ui.saveError && !state.setupDone)) {
+      h = '<div class="errbar" role="alert"><span>Harbor can\'t save on this device right now. In Settings › Apps › Safari, turn off Block All Cookies, then open Harbor again.</span></div>';
+    } else if (ui.saveError) {
       h = '<div class="errbar" role="alert"><span>Couldn\'t save on this device. Make a backup now.</span>' +
         '<button type="button" class="btn btn-soft btn-small" data-action="backup">Back up</button></div>';
     } else if (loadProblem === 'damaged') {
@@ -1232,14 +1265,20 @@
   const BILL_CHIPS = ['Phone', 'Rent', 'Car insurance', 'Internet', 'Streaming', 'Gym'];
   const DEBT_CHIPS = ['Credit card', 'Car loan', 'Afterpay', 'Student loan', 'Personal loan'];
 
-  function chipsHTML(list) {
-    return '<div class="chips" style="margin:-6px 0 18px">' + list.map(function (c) {
+  // Name suggestions; hidden once the name field has text, so the fields below stay above Save.
+  function chipsHTML(list, name) {
+    return '<div class="name-chips"' + (name ? ' hidden' : '') + '><div class="chips" style="margin:-6px 0 18px">' + list.map(function (c) {
       return '<button type="button" class="chip" data-la="chip" data-v="' + esc(c) + '">' + esc(c) + '</button>';
-    }).join('') + '</div>';
+    }).join('') + '</div></div>';
+  }
+  function syncChips(box) {
+    const input = box.querySelector('[data-chip-target]');
+    const chips = box.querySelector('.name-chips');
+    if (input && chips) chips.hidden = !!input.value.trim();
   }
   const chipAction = function (el, entry) {
     const input = entry.box.querySelector('[data-chip-target]');
-    if (input) { input.value = el.dataset.v; input.focus(); }
+    if (input) { input.value = el.dataset.v; syncChips(entry.box); input.focus(); }
   };
 
   // --- bill
@@ -1251,13 +1290,13 @@
     const html = sheetHead(b ? 'Edit bill' : 'Add a bill', tid) +
       '<form data-lsubmit novalidate autocomplete="off">' +
       '<label class="field"><span class="field-label">Name</span><input class="input" id="b-name" data-chip-target maxlength="40" autocapitalize="words" enterkeyhint="next" placeholder="e.g. Phone" value="' + esc(cur.name) + '"></label>' +
-      chipsHTML(BILL_CHIPS) +
+      chipsHTML(BILL_CHIPS, cur.name) +
       '<label class="field"><span class="field-label">Amount</span>' + moneyField('b-amt', cur.amount, { enter: 'next' }) + '</label>' +
       '<div class="field"><span class="field-label">How often</span><div class="seg" role="group" aria-label="How often">' +
       '<button type="button" data-la="freq" data-v="monthly" aria-pressed="' + !yearly + '">Monthly</button>' +
       '<button type="button" data-la="freq" data-v="yearly" aria-pressed="' + yearly + '">Yearly</button></div>' +
       '<input type="hidden" id="b-freq" value="' + (yearly ? 'yearly' : 'monthly') + '"></div>' +
-      '<div class="field"><span class="field-label" id="b-due-label">' + (yearly ? 'Due every year on' : 'Due on the … of the month') + '</span>' +
+      '<div class="field"><span class="field-label" id="b-due-label">' + (yearly ? 'Due every year on' : 'Day it\'s due each month') + '</span>' +
       '<div class="due-row"><select class="select" id="b-month" aria-label="Month"' + (yearly ? '' : ' hidden') + '>' + monthOptions(cur.dueMonth || 1) + '</select>' +
       '<select class="select" id="b-day" aria-label="Day">' + dayOptions(cur.dueDay || 1) + '</select></div>' +
       '<span class="field-help" id="b-help">' + (yearly ? 'We\'ll set a little aside each payday, so it\'s ready when it\'s due.' : '') + '</span></div>' +
@@ -1271,7 +1310,7 @@
           entry.box.querySelectorAll('[data-la="freq"]').forEach(function (x) { x.setAttribute('aria-pressed', String(x === el)); });
           $('b-freq').value = y ? 'yearly' : 'monthly';
           $('b-month').hidden = !y;
-          $('b-due-label').textContent = y ? 'Due every year on' : 'Due on the … of the month';
+          $('b-due-label').textContent = y ? 'Due every year on' : 'Day it\'s due each month';
           $('b-help').textContent = y ? 'We\'ll set a little aside each payday, so it\'s ready when it\'s due.' : '';
         },
         del: function (el, entry) {
@@ -1307,12 +1346,12 @@
     const html = sheetHead(d ? 'Edit debt' : 'Add a debt', tid) +
       '<form data-lsubmit novalidate autocomplete="off">' +
       '<label class="field"><span class="field-label">Name</span><input class="input" id="d-name" data-chip-target maxlength="40" autocapitalize="words" enterkeyhint="next" placeholder="e.g. Visa" value="' + esc(cur.name) + '"></label>' +
-      (d ? '' : chipsHTML(DEBT_CHIPS)) +
+      (d ? '' : chipsHTML(DEBT_CHIPS, cur.name)) +
       '<label class="field"><span class="field-label">How much is left' + (d && state.setupDone ? ' (today)' : '') + '</span>' + moneyField('d-bal', d ? est : null, { enter: 'next' }) +
       (d && state.setupDone ? '<span class="field-help">Change it if your bank says something different.</span>' : '') + '</label>' +
       '<label class="field"><span class="field-label">Smallest monthly payment</span>' + moneyField('d-min', cur.minPayment, { enter: 'next' }) + '</label>' +
       '<div class="two">' +
-      '<label class="field"><span class="field-label">Due on the…</span><select class="select" id="d-due">' + dayOptions(cur.dueDay, true) + '</select></label>' +
+      '<label class="field"><span class="field-label">Day it\'s due</span><select class="select" id="d-due">' + dayOptions(cur.dueDay, true) + '</select></label>' +
       '<label class="field"><span class="field-label">Interest rate %</span><input class="input" id="d-rate" type="text" inputmode="decimal" autocomplete="off" placeholder="Not sure" value="' + esc(cur.rate == null ? '' : String(cur.rate)) + '"></label>' +
       '</div><p class="field-help" style="margin-top:-8px;margin-bottom:18px">Not sure of the day or rate? Leave them — that\'s fine.</p>' +
       '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div>' +
@@ -1342,11 +1381,14 @@
         const dueVal = $('d-due').value;
         const fields = { name: name, minPayment: min || 0, dueDay: dueVal ? parseInt(dueVal, 10) : null, rate: rate };
         if (d) {
+          const termsChanged = fields.minPayment !== d.minPayment || fields.rate !== d.rate || fields.dueDay !== d.dueDay;
+          const untouched = !state.paydays.length && !state.checkins.some(function (c) { return c.debts && c.debts[d.id] != null; });
+          const balChanged = Math.abs(bal - est) >= 0.005;
           Object.assign(d, fields);
-          if (Math.abs(bal - est) >= 0.005) {
-            const untouched = !state.paydays.length && !state.checkins.some(function (c) { return c.debts && c.debts[d.id] != null; });
-            if (untouched) { d.balance = bal; d.asOf = today(); } else E.act.setDebtBalance(state, d.id, bal, now());
-          }
+          if (untouched) { if (balChanged) { d.balance = bal; d.asOf = today(); } }
+          else if (balChanged) E.act.setDebtBalance(state, d.id, bal, now());
+          // New terms apply from today only: pin today's balance so past months aren't rebuilt with them.
+          else if (termsChanged) E.act.setDebtBalance(state, d.id, est, now());
         } else {
           state.debts.push(Object.assign({ id: E.uid(), balance: bal, asOf: today() }, fields));
         }
@@ -1372,11 +1414,34 @@
         clearErrors(entry.box);
         const val = $('r-date').value;
         if (!D.isValid(val)) { setError('r-date', 'Pick a date.'); return; }
-        E.act.setBoatDate(state, val);
+        E.act.setBoatDate(state, val, today());
+        const msg = replanAfterRotation();
         save(); closeLayer(entry); render();
-        toast('Got it — everything\'s lined up.');
+        toast(msg);
       },
     });
+  }
+
+  // After a schedule change: re-plan the open payday (if none of its money moves are ticked yet),
+  // so its spending money matches the new home/boat days. Returns the toast to show.
+  function replanAfterRotation() {
+    const latest = state.paydays[state.paydays.length - 1];
+    if (!latest || !(latest.nextDate > today())) return 'Got it. Everything\'s lined up.';
+    const moved = (latest.plan.items || []).some(function (it) {
+      return (it.kind === 'spend' || it.kind === 'debt' || it.kind === 'save') && latest.ticks && latest.ticks[it.key];
+    });
+    if (moved) return 'Updated. Your next payday will use the new dates.';
+    const spendOf = function (pd) {
+      const it = (pd.plan.items || []).find(function (x) { return x.kind === 'spend'; });
+      return it ? it.amount : 0;
+    };
+    const oldSpend = spendOf(latest);
+    try {
+      E.act.editPayday(state, latest.id, { date: latest.date, amount: latest.amount, nextDate: latest.nextDate }, now(), { money: money });
+    } catch (e) { return 'Got it. Everything\'s lined up.'; }
+    const newSpend = spendOf(latest);
+    if (Math.abs(newSpend - oldSpend) >= 0.005) return 'Got it. Your spending money for this payday is now ' + money(newSpend) + '.';
+    return 'Got it. Everything\'s lined up.';
   }
 
   function openRotLenSheet() {
@@ -1393,8 +1458,13 @@
         const on = parseInt($('rl-on').value, 10), off = parseInt($('rl-off').value, 10);
         if (!(on >= 1 && on <= 365)) { setError('rl-on', 'Pick a number from 1 to 365.'); return; }
         if (!(off >= 1 && off <= 365)) { setError('rl-off', 'Pick a number from 1 to 365.'); return; }
+        // Keep the same daily spending rate when a stretch gets longer or shorter.
+        const oldOn = s.onDays, oldOff = s.offDays;
+        if (s.homeSpend != null && off !== oldOff) s.homeSpend = E.roundTo(s.homeSpend * off / oldOff, 10);
+        if (s.boatSpend != null && on !== oldOn) s.boatSpend = E.roundTo(s.boatSpend * on / oldOn, 10);
         s.onDays = on; s.offDays = off;
-        save(); closeLayer(entry); render(); toast('Rotation updated.');
+        const msg = replanAfterRotation();
+        save(); closeLayer(entry); render(); toast(msg);
       },
     });
   }
@@ -1516,9 +1586,24 @@
     });
     fields += '<label class="field"><span class="field-label">Savings</span>' +
       moneyField('ci-savings', null, { placeholder: 'We think ' + E.round2(s.savings).toLocaleString('en-US') }) + '</label>';
+    // Undone debt/savings steps from the latest payday: tick them first, so a real balance isn't counted twice.
+    const latest = state.paydays[state.paydays.length - 1];
+    const pending = latest ? (latest.plan.items || []).filter(function (it) {
+      return it.amount > 0 && (it.kind === 'debt' || it.kind === 'save') && !(latest.ticks && latest.ticks[it.key]);
+    }) : [];
+    let pend = '';
+    if (pending.length) {
+      pend = '<div class="field ci-pending"><span class="field-label">Did you already do any of these?</span>' +
+        '<span class="field-help" style="margin:-4px 2px 10px">Tick them first so we don\'t count them twice.</span>' +
+        pending.map(function (it, i) {
+          const cid = 'ci-step-' + i;
+          return '<label class="check-row" for="' + cid + '"><input type="checkbox" id="' + cid + '" name="step:' + esc(it.key) + '" data-key="' + esc(it.key) + '">' +
+            '<span>' + esc(it.label) + '</span></label>';
+        }).join('') + '</div>';
+    }
     const html = sheetHead('Quick check-in (30 seconds)', domId('ci')) +
       '<p class="sheet-lead">Open your bank apps and type what they say. Skip any you\'re not sure of.</p>' +
-      '<form data-lsubmit novalidate autocomplete="off">' + fields +
+      '<form data-lsubmit novalidate autocomplete="off">' + pend + fields +
       '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button>' +
       '<button type="button" class="btn btn-text" data-la="later">Not now</button></div></form>';
     openLayer(html, {
@@ -1542,12 +1627,19 @@
         if (Number.isNaN(sv)) bad = bad || 'ci-savings';
         if (bad) { setError(bad, 'That doesn\'t look like an amount.'); return; }
         if (sv !== null) any = true;
+        const n = now();
+        const ticked = [];
+        entry.box.querySelectorAll('.ci-pending input[type=checkbox]').forEach(function (cb) {
+          if (cb.checked) ticked.push(cb.dataset.key);
+        });
+        ticked.forEach(function (key) { E.act.tick(state, latest.id, key, true, n); });
         if (!any) {
+          if (ticked.length) { save(); closeLayer(entry); render(); toast('Saved.'); return; }
           E.act.snoozeCheckin(state, today(), 30);
           save(); closeLayer(entry); render();
           return;
         }
-        E.act.addCheckin(state, { debts: debts, savings: sv }, now());
+        E.act.addCheckin(state, { debts: debts, savings: sv }, n);
         save(); closeLayer(entry); render();
         toast('Thanks! Your numbers are up to date.');
       },
@@ -1607,8 +1699,7 @@
     if (canShare) {
       navigator.share({ files: [file], title: 'Harbor backup' }).then(function () { backedUp('share'); }).catch(function (err) {
         if (err && err.name === 'AbortError') return;   // they closed the share sheet
-        downloadFile(text, name);
-        backedUp('download');
+        notice('Backup didn\'t finish', 'Tap Back up again. Your data is still here.');
       });
       return;
     }
@@ -1634,6 +1725,10 @@
   function onRestoreFile() {
     const file = $file.files && $file.files[0];
     if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      notice('That file didn\'t work', 'That file is too big to be a Harbor backup. Your current data wasn\'t changed.');
+      return;
+    }
     readFileText(file).then(function (text) {
       const r = E.readBackup(text, today());
       if (!r.ok) {
@@ -1645,11 +1740,21 @@
       const count = n === 0 ? 'no paydays yet' : plural(n, 'payday');
       confirmBox('Replace everything?', 'Replace everything in Harbor with ' + from + ' (' + count + ')?', 'Replace', 'Cancel', false).then(function (yes) {
         if (!yes) return;
+        const prev = state;
         state = r.state;
+        save();
+        if (ui.saveError) {
+          // There's no room to keep it: put the current data back, untouched.
+          state = prev;
+          ui.saveError = false;
+          save();
+          notice('Couldn\'t restore', 'There isn\'t room to save that backup on this device. Your current data wasn\'t changed.');
+          return;
+        }
         loadProblem = null;
         ui.why = {}; ui.flow = null; ui.otherCur = false;
         while (layers.length) closeLayer(layers[layers.length - 1]);
-        save();
+        renderBanner();
         if (state.setupDone) { dropStep(); go('today'); } else { ui.setupStep = 0; render(); }
         toast('Restored ✓ Welcome back.');
       });
@@ -1778,11 +1883,23 @@
     checkin: function () { openCheckinSheet(); },
     snoozeCheckin: function () { E.act.snoozeCheckin(state, today(), 30); save(); render(); },
     backup: function () { backup(); },
+    safariHow: function () { openSafariSheet(); },
+    safariLater: function () { ui.safariLater = true; render(); },
     snoozeBackup: function () { E.act.snoozeBackup(state, today(), 7); save(); render(); toast('Okay — we\'ll remind you next week.'); },
     dismissLoad: function () { loadProblem = null; renderBanner(); },
 
     // payday flow
-    flowClose: function () { ui.flow = null; go('today'); },
+    flowClose: function () {
+      // The spending-card tip is a one-time suggestion: once it has been shown on a plan, don't repeat it.
+      const f = ui.flow;
+      const pd = f && f.step === 'C' && findPayday(f.pdId);
+      if (pd && !state.meta.tips.spendingCard &&
+          (pd.plan.items || []).some(function (it) { return it.kind === 'spend' && it.amount > 0; })) {
+        state.meta.tips.spendingCard = true;
+        save();
+      }
+      ui.flow = null; go('today');
+    },
     flowBack: function () { if (ui.flow) { ui.flow.step = 'A'; render(); window.scrollTo(0, 0); } },
     flowContinue: function () { ui.flow.step = 'B'; ui.flow.fromA = true; render(); window.scrollTo(0, 0); const a = $('p-amt'); if (a) a.focus(); },
     fillUsual: function () { const a = $('p-amt'); if (a) { a.value = numStr(state.settings.payAmount); a.focus(); } },
@@ -1897,11 +2014,9 @@
         return;
       }
       save();
-      const edited = !!f.editId;
       f.step = 'C';
       render();
       window.scrollTo(0, 0);
-      if (edited) toast('Plan updated.');
     },
   };
 
@@ -1957,6 +2072,7 @@
       const err = field && field.querySelector('.field-error');
       if (err) err.remove();
     }
+    if (el.hasAttribute('data-chip-target')) { const box = el.closest('.sheet'); if (box) syncChips(box); }
     const fn = el.dataset && LIVE[el.dataset.live];
     if (fn) fn(el);
   });

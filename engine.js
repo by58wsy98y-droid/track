@@ -139,6 +139,16 @@
       const t = D.dayNum(today), b = D.dayNum(settings.boatDate);
       if (t < b) {
         const daysLeft = b - t;
+        // Home since a known day (the boat date was moved later while home): count from then.
+        const hs = settings.homeSince;
+        if (D.isValid(hs) && hs <= today && hs < settings.boatDate) {
+          const h = D.dayNum(hs);
+          return {
+            where: 'home', day: t - h + 1, of: b - h,
+            changeDate: settings.boatDate, daysLeft, stretchStart: hs,
+            stretchEnd: D.fromDayNum(b - 1), beforeStart: true,
+          };
+        }
         const inside = daysLeft <= off;
         return {
           where: 'home', day: inside ? off - daysLeft + 1 : null, of: inside ? off : null,
@@ -230,11 +240,20 @@
         case 'weekly': return D.addDays(dateIso, 7);
         case 'semimonthly': {
           const [y, m, d] = parts(dateIso);
-          if (d <= 15) return isoOf(y, m, Math.min(d + 15, D.daysInMonth(y, m)));
           const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+          if (d === 15) return isoOf(y, m, D.daysInMonth(y, m));        // the 15th → month end
+          if (d === D.daysInMonth(y, m)) return isoOf(ny, nm, 15);       // month end → the 15th
+          if (d < 15) return isoOf(y, m, Math.min(d + 15, D.daysInMonth(y, m)));
           return isoOf(ny, nm, Math.max(1, d - 15));
         }
-        case 'monthly': return D.addMonths(dateIso, 1);
+        case 'monthly': {
+          const [y, m, d] = parts(dateIso);
+          if (d === D.daysInMonth(y, m)) {                                // month end stays month end
+            const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+            return isoOf(ny, nm, D.daysInMonth(ny, nm));
+          }
+          return D.addMonths(dateIso, 1);
+        }
         case 'rotation': return D.addDays(dateIso, rot(settings).cycle);
         default: return D.addDays(dateIso, 14); // biweekly, varies, unknown
       }
@@ -289,7 +308,8 @@
     });
     (state.checkins || []).forEach((c) => {
       if (!D.isValid(c.date) || c.date > untilIso) return;
-      events.push({ date: c.date, order: 1, t: num(c.t), seq: seq++, run: () => checkin(c) });
+      // Order 2: on the same day a check-in comes after ticks — its real number already includes them.
+      events.push({ date: c.date, order: 2, t: num(c.t), seq: seq++, run: () => checkin(c) });
     });
     events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) ||
       a.order - b.order || a.t - b.t || a.seq - b.seq);
@@ -360,10 +380,19 @@
     const h = num(settings && settings.homeSpend), b = num(settings && settings.boatSpend);
     return round2((h + b) * DAYS_PER_MONTH / rot(settings).cycle);
   }
+  // Monthly spending the plan really uses: skipped stretch amounts fall back to the suggestion.
+  function monthlySpendOf(state) {
+    const s = state.settings || {};
+    const paydays = state.paydays || [];
+    let payAmt = num(s.payAmount);
+    if (!(payAmt > 0)) payAmt = paydays.length ? sum(paydays, (p) => num(p.amount)) / paydays.length : 0;
+    const r = spendingRates(state, payAmt);
+    return round2((r.home + r.boat) * DAYS_PER_MONTH / rot(s).cycle);
+  }
   function cushionOf(state) { return Math.max(0, num(state.settings && state.settings.cushion)); }
   function safetyTarget(state) {
     const months = num(state.settings && state.settings.safetyMonths) || 3;
-    const t = Math.max(cushionOf(state), months * (monthlyBills(state) + monthlySpend(state.settings)));
+    const t = Math.max(cushionOf(state), months * (monthlyBills(state) + monthlySpendOf(state)));
     return roundTo(t, 10);
   }
   function stage(o) {
@@ -515,7 +544,7 @@
       if (D.isValid(w.billsTo) && (!prevBillsTo || w.billsTo > prevBillsTo)) prevBillsTo = w.billsTo;
       if (D.isValid(w.spendTo) && (!prevSpendTo || w.spendTo > prevSpendTo)) prevSpendTo = w.spendTo;
     });
-    const billsFrom = prevBillsTo ? maxIso(D.addDays(prevBillsTo, 1), D.addDays(date, -7)) : date;
+    const billsFrom = prevBillsTo ? maxIso(D.addDays(prevBillsTo, 1), D.addDays(date, -31)) : date;
     const billsTo = nextDate;
     const spendFrom = prevSpendTo ? maxIso(D.addDays(prevSpendTo, 1), date) : date;
     const spendTo = D.addDays(nextDate, -1);
@@ -565,19 +594,25 @@
       if (r.balance > EPS) debtsNow.push({ id: d.id, name: d.name, rate: d.rate, balance: r.balance, toClear: sim.balance });
     });
     bills.sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
-    const billsNeed = round2(sum(bills, (b) => b.amount) + sum(yearlyAside, (y) => y.amount));
+    let billsNeed = round2(sum(bills, (b) => b.amount) + sum(yearlyAside, (y) => y.amount));
 
     // 2. Spending money
     const days = rotation.countDays(s, spendFrom, spendTo);
     const rates = spendingRates(state, s.payAmount != null ? s.payAmount : amount);
     const desired = desiredSpend(days, rates);
-    const split = splitMoney(amount, billsNeed, desired);
-    if (split.short) {
-      // Only record the set-aside money that was really there, so a later yearly bill isn't short.
-      let avail = round2(Math.max(0, amount - sum(bills, (b) => b.amount)));
+    // Only record the set-aside money that was really there, so a later yearly bill isn't short.
+    const trimAside = (avail) => {
       yearlyAside.forEach((y) => { y.amount = round2(Math.min(y.amount, avail)); avail = round2(avail - y.amount); });
       for (let i = yearlyAside.length - 1; i >= 0; i--) if (!(yearlyAside[i].amount > 0)) yearlyAside.splice(i, 1);
+    };
+    const dueBills = sum(bills, (b) => b.amount);
+    if (amount + EPS >= dueBills && amount + EPS < billsNeed) {
+      // Every bill due is covered; only the yearly set-aside falls short. That's tight, not short.
+      trimAside(round2(amount - dueBills));
+      billsNeed = round2(dueBills + sum(yearlyAside, (y) => y.amount));
     }
+    const split = splitMoney(amount, billsNeed, desired);
+    if (split.short) trimAside(round2(Math.max(0, amount - dueBills)));
 
     // 3. Goals
     const ordered = orderDebts(debtsNow, s.method);
@@ -585,8 +620,33 @@
       total: split.goals, savings: bal.savings, cushion, debtShare: clampShare(s.debtShare),
       debts: ordered.map((d) => ({ id: d.id, name: d.name, toClear: d.toClear })),
     });
+    // A debt this payday clears: pay its upcoming regular payments now too, so ticking the one
+    // step pays it off today. That money moves from the bills pile to the debt step.
+    const folded = {};
+    wf.debts.forEach((x) => {
+      if (!x.clears) return;
+      let f = 0;
+      for (let i = bills.length - 1; i >= 0; i--) {
+        const b = bills[i];
+        if (b.kind === 'min' && b.refId === x.debtId && b.due > date) { f = round2(f + b.amount); bills.splice(i, 1); }
+      }
+      if (!(f > 0)) return;
+      folded[x.debtId] = f;
+      x.amount = round2(x.amount + f);
+      split.billsKeep = round2(split.billsKeep - f);
+      billsNeed = round2(billsNeed - f);
+      // Interest the simulation added won't be charged when it's paid off today.
+      const cap = ceilWhole(bal.debts[x.debtId].balance);
+      if (x.amount > cap) {
+        const back = floorWhole(x.amount - cap);            // whole units to savings, stray cents stay in checking
+        split.leftover = round2(split.leftover + (x.amount - cap - back));
+        x.amount = cap;
+        if (!(wf.savings > 0)) wf.parts.overflow += back;
+        wf.savings += back;
+      }
+    });
     const paidBy = {};
-    wf.debts.forEach((x) => { paidBy[x.debtId] = x.amount; });
+    wf.debts.forEach((x) => { paidBy[x.debtId] = x.clears ? Infinity : x.amount; });
     const stageBefore = stage({ savings: bal.savings, openDebtCount: debtsNow.length, cushion, safetyTarget: target });
     const stageAfter = stage({
       savings: bal.savings + wf.savings,
@@ -597,7 +657,7 @@
     let status = 'ok';
     if (split.short) status = 'short';
     else if (split.spend < desired || (split.goals === 0 && desired > 0)) status = 'tight';
-    const shortBy = split.short ? round2(billsNeed - amount) : 0;
+    const shortBy = split.short ? round2(dueBills - amount) : 0;
 
     const plan = {
       v: 1, date, amount, nextDate,
@@ -611,7 +671,7 @@
       status, shortBy,
       headline: '', note: null, items: [],
     };
-    const ctx = { m, s, cushion, target, savingsBefore: bal.savings, wf, split, days, rates, desired };
+    const ctx = { m, s, cushion, target, savingsBefore: bal.savings, wf, split, days, rates, desired, folded, openDebts: debtsNow.length };
     Object.assign(plan, planText(plan, ctx));
     plan.items = planItems(plan, ctx);
     return plan;
@@ -668,15 +728,18 @@
 
     // Debts.
     const pct = Math.round(clampShare(s.debtShare) * 100);
-    const lead = pct >= 100 ? 'All of your extra money' : pct + '% of your extra money';
+    const lead = pct >= 100 ? 'Everything left after bills and spending' : pct + '% of what\'s left after bills and spending';
     const how = s.method === 'interest'
       ? ' goes to one debt at a time, highest interest rate first, so you pay less interest.'
       : ' goes to one debt at a time, smallest first, for quick wins.';
     wf.debts.forEach((d) => {
       if (!(d.amount > 0)) return;
+      const how1 = ctx.openDebts === 1 ? ' goes to ' + d.name + ' until it\'s gone.' : how;
+      const whole = d.clears && ctx.folded && ctx.folded[d.debtId] > 0;
       const it = { key: 'debt:' + d.debtId, kind: 'debt', amount: d.amount,
-        label: 'Pay ' + m(d.amount) + ' extra on ' + d.name + (d.clears ? ' — that clears it! 🎉' : ''),
-        why: lead + how + (d.clears ? ' This plus your regular payment pays it off.' : ''),
+        label: 'Pay ' + m(d.amount) + (whole ? ' on ' : ' extra on ') + d.name + (d.clears ? ' — that clears it! 🎉' : ''),
+        why: lead + how1 + (whole ? ' This pays off the whole balance, including this month\'s regular payment.'
+          : d.clears ? ' This pays it off.' : ''),
         debtId: d.debtId, clears: !!d.clears };
       items.push(it);
     });
@@ -701,6 +764,12 @@
   }
 
   function billsWhy(plan, m) {
+    const late = plan.status !== 'short' && plan.bills.some((b) => b.past === true)
+      ? ' Some of these were due before today, so pay them now if you haven\'t yet.' : '';
+    const base = billsWhyBase(plan, m);
+    return base.charAt(0).toUpperCase() + base.slice(1) + late;
+  }
+  function billsWhyBase(plan, m) {
     const names = [];
     plan.bills.filter((b) => b.kind !== 'min').forEach((b) => { if (names.indexOf(b.name) < 0) names.push(b.name); });
     plan.bills.filter((b) => b.kind === 'min').forEach((b) => {
@@ -729,7 +798,10 @@
   function spendSub(plan, days, m) {
     const sp = plan.spend;
     const total = days.home + days.boat + days.other;
-    if (sp.amount < sp.desired) return 'about ' + m(perDay(sp.amount / Math.max(1, total))) + ' a day';
+    if (sp.amount < sp.desired) {
+      const rate = sp.amount / Math.max(1, total);
+      return rate < 1 ? 'less than ' + m(1) + ' a day' : 'about ' + m(perDay(rate)) + ' a day';
+    }
     if (days.home > 0 && days.boat > 0) {
       return 'about ' + m(perDay(sp.homeDaily)) + ' a day at home · ' + m(perDay(sp.boatDaily)) + ' on the boat';
     }
@@ -743,13 +815,13 @@
       return 'Bills come first, so this is what\'s left for groceries, gas and fun until your next payday.';
     }
     const bits = [];
-    if (days.home > 0) bits.push(plural(days.home, 'day') + ' at home × ' + m(perDay(sp.homeDaily)));
-    if (days.boat > 0) bits.push(plural(days.boat, 'day') + ' on the boat × ' + m(perDay(sp.boatDaily)));
-    if (days.other > 0) bits.push(plural(days.other, 'day') + ' × ' + m(perDay(sp.otherDaily)));
+    if (days.home > 0) bits.push(plural(days.home, 'day') + ' at home at about ' + m(perDay(sp.homeDaily)) + ' a day');
+    if (days.boat > 0) bits.push(plural(days.boat, 'day') + ' on the boat at about ' + m(perDay(sp.boatDaily)) + ' a day');
+    if (days.other > 0) bits.push(plural(days.other, 'day') + ' at about ' + m(perDay(sp.otherDaily)) + ' a day');
     const tail = days.home > 0 && days.boat > 0
-      ? ' — home days get more because that\'s when life costs more.'
-      : ' — enough for groceries, gas and fun until your next payday.';
-    return bits.join(' + ') + tail;
+      ? '. Home days get more because that\'s when life costs more.'
+      : '. That\'s enough for groceries, gas and fun until your next payday.';
+    return bits.join(', plus ') + tail;
   }
 
   function saveWhy(ctx, pct) {
@@ -761,7 +833,7 @@
     }
     if (p.cushion > 0 && p.share > 0) {
       return 'This finishes your ' + m(cushion) + ' starter cushion, and ' + savePct +
-        '% of the rest keeps it growing while you crush debt.';
+        '% of the rest keeps growing your safety net while you crush debt.';
     }
     if (p.cushion > 0 && p.rest > 0) {
       return 'This finishes your ' + m(cushion) + ' starter cushion, and the rest starts your full safety net.';
@@ -769,11 +841,14 @@
     if (p.cushion > 0) {
       return 'You\'re building a ' + m(cushion) + ' starter cushion first, so a surprise doesn\'t land back on a credit card.';
     }
-    if (p.share > 0) return savePct + '% keeps your cushion growing while you crush debt.';
+    if (p.share > 0) return savePct + '% keeps growing your safety net while you crush debt.';
     if (savingsBefore < target - 0.5) {
       const months = num(ctx.s.safetyMonths) || 3;
-      return 'You\'re debt-free! Extra money now grows your safety net to ' + plural(months, 'month') +
-        ' of expenses (' + m(target) + ').';
+      const goal = plural(months, 'month') + ' of bills and spending (' + m(target) + ').';
+      if (ctx.openDebts > 0) {
+        return 'Your last debt gets paid off by its regular payment before your next payday, so extra money now grows your safety net to ' + goal;
+      }
+      return 'You\'re debt-free! Extra money now grows your safety net to ' + goal;
     }
     return 'Your safety net is full — this keeps growing your savings. (Your own goals, like a truck or a trip, are coming later.)';
   }
@@ -809,6 +884,19 @@
     let billsFrom = lastW && D.isValid(lastW.billsTo) ? maxIso(D.addDays(lastW.billsTo, 1), p) : p;
     let cursor = today;                    // due dates through `cursor` are already in the balances
     let savings = bal.savings;
+    // The latest payday's steps not ticked yet are money already planned: count them in the
+    // simulation (not in alreadyDebtFree, so nothing is claimed before it's ticked).
+    if (latest && latest.plan && Array.isArray(latest.plan.items)) {
+      latest.plan.items.forEach((it) => {
+        if (!(it.amount > 0) || isTicked(latest, it.key)) return;
+        if (it.kind === 'debt') {
+          const d = debts.find((y) => y.id === it.debtId);
+          if (d) d.balance = round2(Math.max(0, d.balance - it.amount));
+        } else if (it.kind === 'save') {
+          savings = round2(savings + it.amount);
+        }
+      });
+    }
     const end = D.addDays(today, 3653);    // give up after 10 years
     const yearlyTotal = sum((state.bills || []).filter((b) => b.freq === 'yearly'), (b) => num(b.amount));
     const monthly = (state.bills || []).filter((b) => b.freq !== 'yearly');
@@ -912,7 +1000,8 @@
       add('first', '🎉', 'First payday done!', 'You followed your plan for a whole payday. That\'s the hardest part, and you did it.');
     }
     if (ctx.savings >= ctx.cushion - 0.5 && ctx.cushion > 0) {
-      add('cushion', '🛟', 'Starter cushion reached!', 'You\'ve got ' + m(ctx.cushion) + ' set aside for surprises. Now let\'s crush the debt.');
+      add('cushion', '🛟', 'Starter cushion reached!', 'You\'ve got ' + m(ctx.cushion) + ' set aside for surprises. Next up: ' +
+        (ctx.openOrdered.length > 0 ? 'crushing your debts.' : 'growing your full safety net.'));
     }
     ctx.debts.filter((d) => !d.open).forEach((d) => {
       add('paid:' + d.id, '🏝️', d.name + ': PAID OFF!', d.name + ' is gone for good. One less thing to carry.');
@@ -1017,7 +1106,7 @@
       rotation: rotation.status(ctx.s, today),
       balances: ctx.balances,
       savings: ctx.savings, cushion: ctx.cushion, safetyTarget: ctx.target,
-      monthlyExpenses: round2(monthlyBills(state) + monthlySpend(ctx.s)),
+      monthlyExpenses: round2(monthlyBills(state) + monthlySpendOf(state)),
       stage: ctx.stage, stageName: STAGE_NAMES[ctx.stage],
       debts: ctx.debts,
       totalDebtStart: ctx.totalDebtStart, totalDebtNow: ctx.totalDebtNow,
@@ -1045,7 +1134,7 @@
       schema: 1, app: 'harbor', createdAt: today, setupDone: false,
       settings: {
         currency: 'USD', currencySymbol: null, boatDate: null, onDays: 28, offDays: 14,
-        payAmount: null, payFreq: null, homeSpend: null, boatSpend: null,
+        payAmount: null, payFreq: null, homeSpend: null, boatSpend: null, homeSince: null,
         cushion: 1000, safetyMonths: 3, debtShare: 0.8, method: 'quick',
       },
       bills: [], debts: [],
@@ -1081,6 +1170,7 @@
       s.currency = str(i.currency, 'USD');
       s.currencySymbol = typeof i.currencySymbol === 'string' && i.currencySymbol ? i.currencySymbol : null;
       s.boatDate = D.isValid(i.boatDate) ? i.boatDate : null;
+      s.homeSince = D.isValid(i.homeSince) ? i.homeSince : null;
       s.onDays = intIn(i.onDays, 1, 365, 28);
       s.offDays = intIn(i.offDays, 1, 365, 14);
       s.payAmount = posNumOrNull(i.payAmount);
@@ -1154,7 +1244,10 @@
   }
 
   function makeBackup(state, today) {
-    return { app: 'harbor', schema: 1, exportedAt: today, data: JSON.parse(JSON.stringify(state)) };
+    const data = JSON.parse(JSON.stringify(state));
+    // The file records its own backup date, so restoring it doesn't ask for a backup right away.
+    if (isObj(data.meta)) { data.meta.lastBackupAt = today; data.meta.backupSnoozeUntil = null; }
+    return { app: 'harbor', schema: 1, exportedAt: today, data };
   }
 
   function readBackup(obj, today) {
@@ -1252,9 +1345,22 @@
       return state;
     },
 
-    setBoatDate(state, iso) {
+    // today (optional): when the new date is later and you're home, remember when you got home
+    // so the banner keeps counting from then instead of making up a stretch.
+    setBoatDate(state, iso, today) {
       if (iso !== null && !D.isValid(iso)) throw new Error('Pick a date.');
-      state.settings.boatDate = iso;
+      const s = state.settings;
+      let homeSince = null;
+      if (D.isValid(today) && iso && iso > today) {
+        const old = rotation.status(s, today);
+        if (old && old.where === 'home') {
+          if (!old.beforeStart) homeSince = old.stretchStart;
+          else if (D.isValid(s.homeSince) && s.homeSince <= today) homeSince = s.homeSince;
+          else if (old.day) homeSince = D.addDays(today, -(old.day - 1));
+        }
+      }
+      s.boatDate = iso;
+      s.homeSince = homeSince;
       return state;
     },
 
@@ -1289,6 +1395,6 @@
     streak, milestones, isComplete,
     newState, normalizeState, makeBackup, readBackup,
     act,
-    internal: { goalsWaterfall, splitMoney, spendingRates, simulateMins, monthlyDatesIn, nextYearly },
+    internal: { monthlySpendOf, goalsWaterfall, splitMoney, spendingRates, simulateMins, monthlyDatesIn, nextYearly },
   };
 });

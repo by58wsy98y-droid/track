@@ -169,9 +169,9 @@ test('pay: intervals, per-month, guessNext for every frequency', () => {
   assert.equal(E.pay.guessNext(f('weekly'), '2026-10-01'), '2026-10-08');
   assert.equal(E.pay.guessNext(f('biweekly'), '2026-10-01'), '2026-10-15');
   assert.equal(E.pay.guessNext(f('semimonthly'), '2026-10-01'), '2026-10-16');
-  assert.equal(E.pay.guessNext(f('semimonthly'), '2026-10-15'), '2026-10-30');
+  assert.equal(E.pay.guessNext(f('semimonthly'), '2026-10-15'), '2026-10-31');
   assert.equal(E.pay.guessNext(f('semimonthly'), '2026-10-16'), '2026-11-01');
-  assert.equal(E.pay.guessNext(f('semimonthly'), '2026-10-31'), '2026-11-16');
+  assert.equal(E.pay.guessNext(f('semimonthly'), '2026-10-31'), '2026-11-15');
   assert.equal(E.pay.guessNext(f('semimonthly'), '2027-02-15'), '2027-02-28');
   assert.equal(E.pay.guessNext(f('semimonthly'), '2028-02-14'), '2028-02-29');
   assert.equal(E.pay.guessNext(f('semimonthly'), '2026-12-20'), '2027-01-05');
@@ -210,7 +210,7 @@ test('P1: first payday splits $2,000 exactly as the spec says', () => {
   assert.equal(item(p, 'bills').label, 'Leave $290 in checking for bills');
   assert.equal(item(p, 'spend').label, 'Move $950 to your spending card');
   assert.equal(item(p, 'spend').sub, 'about $100 a day at home · $10 on the boat');
-  assert.match(item(p, 'spend').why, /9 days at home × \$100 \+ 5 days on the boat × \$10/);
+  assert.match(item(p, 'spend').why, /9 days at home at about \$100 a day, plus 5 days on the boat at about \$10 a day\./);
   assert.equal(item(p, 'save').label, 'Move $760 to savings');
   assert.match(item(p, 'save').why, /\$1,000 starter cushion/);
   assert.match(item(p, 'bills').why, /Car insurance, Phone and your Visa minimum are due/);
@@ -227,38 +227,38 @@ test('P2: stage 1 → 2 inside one paycheck, quick wins, clears Store card', () 
   assert.equal(p.window.billsTo, '2026-10-29');
   assert.equal(p.window.spendFrom, '2026-10-15');
   assert.equal(p.window.spendTo, '2026-10-28');
+  // The Store card's Oct 18 minimum moves into the step that clears it.
   assert.deepEqual(p.bills.map((b) => [b.name, b.amount, b.due, b.kind]), [
-    ['Store card', 25, '2026-10-18', 'min'],
     ['Streaming', 15, '2026-10-20', 'bill'],
   ]);
   assert.deepEqual(p.yearlyAside, [{ billId: 'reg', name: 'Car registration', amount: 20, dueDate: '2027-03-15' }]);
-  assert.equal(p.billsNeed, 60);
+  assert.equal(p.billsNeed, 35);
   assert.equal(p.spend.amount, 590);
   assert.equal(p.window.homeDays, 5);
   assert.equal(p.window.boatDays, 9);
   assert.equal(p.goals.total, 1350);
   assert.deepEqual(p.goals.debts, [
-    { debtId: 'store', name: 'Store card', amount: 475, clears: true },
+    { debtId: 'store', name: 'Store card', amount: 500, clears: true },
     { debtId: 'visa', name: 'Visa', amount: 573, clears: false },
   ]);
   assert.equal(p.goals.savings, 302);
   assert.equal(p.goals.stageBefore, 1);
   assert.equal(p.goals.stageAfter, 2);
   assert.deepEqual(p.items.map((i) => [i.key, i.amount]), [
-    ['bills', 60], ['spend', 590], ['debt:store', 475], ['debt:visa', 573], ['save', 302]]);
-  assert.equal(item(p, 'debt:store').label, 'Pay $475 extra on Store card — that clears it! 🎉');
+    ['bills', 35], ['spend', 590], ['debt:store', 500], ['debt:visa', 573], ['save', 302]]);
+  assert.equal(item(p, 'debt:store').label, 'Pay $500 on Store card — that clears it! 🎉');
   assert.equal(item(p, 'debt:store').clears, true);
   assert.equal(item(p, 'debt:store').debtId, 'store');
-  assert.match(item(p, 'debt:store').why, /80% of your extra money goes to one debt at a time, smallest first, for quick wins\. This plus your regular payment pays it off\./);
+  assert.match(item(p, 'debt:store').why, /80% of what's left after bills and spending goes to one debt at a time, smallest first, for quick wins\. This pays off the whole balance, including this month's regular payment\./);
   assert.equal(item(p, 'debt:visa').label, 'Pay $573 extra on Visa');
   assert.equal(item(p, 'save').label, 'Move $302 to savings');
   assert.match(item(p, 'save').why, /starter cushion.*20% of the rest/);
   assert.equal(itemsSum(p), 2000);
-  // Ticking the Store card payment pays it off on its due date (the minimum covers the last $25).
+  // Ticking the Store card payment pays it off right away.
   tickAll(s, p2, '2026-10-15');
   const r = E.replay(s, '2026-10-18');
   assert.equal(r.debts.store.balance, 0);
-  assert.equal(r.debts.store.paidOffOn, '2026-10-18');
+  assert.equal(r.debts.store.paidOffOn, '2026-10-15');
   assert.equal(r.debts.visa.balance, 611);
   assert.equal(r.savings, 1262);
 });
@@ -277,16 +277,17 @@ test('P3: $80 is tight — bills covered, a little spending, goals wait', () => 
   assert.equal(itemsSum(p), 80);
 });
 
-test('P4: $45 is short — kind words, keep it all for bills', () => {
-  const { p2 } = afterP2(45);
+test('P4: $30 is short — kind words, keep it all for bills', () => {
+  const { p2 } = afterP2(30);
   const p = p2.plan;
   assert.equal(p.status, 'short');
-  assert.equal(p.shortBy, 15);
-  assert.equal(p.billsKeep, 45);
+  assert.equal(p.shortBy, 10);            // $40 of bills due (Store card minimum + Streaming)
+  assert.equal(p.billsKeep, 30);
   assert.equal(p.spend.amount, 0);
   assert.equal(p.goals.total, 0);
-  assert.deepEqual(p.items.map((i) => [i.key, i.amount]), [['bills', 45]]);
-  assert.equal(p.headline, 'This check is $15 short of your bills. That happens, and it\'s fixable.');
+  assert.deepEqual(p.yearlyAside, []);
+  assert.deepEqual(p.items.map((i) => [i.key, i.amount]), [['bills', 30]]);
+  assert.equal(p.headline, 'This check is $10 short of your bills. That happens, and it\'s fixable.');
   assert.match(p.note, /Keep all of it in checking/);
   assert.doesNotMatch(p.headline + p.note, /should|must|failed|overspen/i);
 });
@@ -346,7 +347,7 @@ test('yearly bill due inside the window: full remaining amount, minus what was s
   assert.equal(after.plan.yearlyAside[0].dueDate, '2028-03-15');
 });
 
-test('late paycheck: 7-day catch-up covers bills due since the last window', () => {
+test('late paycheck: 31-day catch-up covers bills due since the last window', () => {
   const { s } = afterP1();
   const p = E.act.addPayday(s, { date: '2026-10-20', amount: 2000, nextDate: '2026-11-03' }).plan;
   assert.equal(p.window.billsFrom, '2026-10-16');
@@ -358,12 +359,17 @@ test('late paycheck: 7-day catch-up covers bills due since the last window', () 
   assert.ok(p.bills.find((b) => b.refId === 'ins' && b.due === '2026-11-05') === undefined);
   // Spending restarts the day after the last covered day (no gap/overlap).
   assert.equal(p.window.spendFrom, '2026-10-20');
-  // A very late paycheck only reaches back 7 days.
+  // Two weeks late still reaches back to the last window.
   const { s: s2 } = afterP1();
   const q = E.act.addPayday(s2, { date: '2026-10-30', amount: 2000, nextDate: '2026-11-13' }).plan;
-  assert.equal(q.window.billsFrom, '2026-10-23');
-  assert.equal(q.bills.find((b) => b.refId === 'stream'), undefined);
-  assert.equal(q.bills.find((b) => b.refId === 'store'), undefined);
+  assert.equal(q.window.billsFrom, '2026-10-16');
+  assert.ok(q.bills.find((b) => b.refId === 'stream' && b.past));
+  assert.ok(q.bills.find((b) => b.refId === 'store' && b.past));
+  // A very late paycheck only reaches back 31 days.
+  const { s: s3 } = afterP1();
+  const r = E.act.addPayday(s3, { date: '2026-11-30', amount: 2000, nextDate: '2026-12-14' }).plan;
+  assert.equal(r.window.billsFrom, '2026-10-30');
+  assert.equal(r.bills.find((b) => b.refId === 'stream' && b.due === '2026-10-20'), undefined);
 });
 
 test('early paycheck: no bill or spending day counted twice', () => {
@@ -407,17 +413,17 @@ test('payday entered with an earlier "Paid on" date still counts steps ticked si
   tickAll(s, p1, '2026-10-16');
   const p = E.act.addPayday(s, { date: '2026-10-15', amount: 2000, nextDate: '2026-10-29' }).plan;
   assert.deepEqual(p.items.map((i) => [i.key, i.amount]), [
-    ['bills', 60], ['spend', 590], ['debt:store', 475], ['debt:visa', 573], ['save', 302]]);
+    ['bills', 35], ['spend', 590], ['debt:store', 500], ['debt:visa', 573], ['save', 302]]);
   // Plain replay still dates those ticks on Oct 16.
   assert.equal(E.replay(s, '2026-10-15').savings, 200);
   assert.equal(E.replay(s, '2026-10-16').savings, 960);
 });
 
-test('a short paycheck only records the set-aside money that was really there', () => {
+test('a tight or short paycheck only records the set-aside money that was really there', () => {
   const { s, p2 } = afterP2(45);
-  assert.equal(p2.plan.status, 'short');
+  assert.equal(p2.plan.status, 'tight', 'every bill is covered; only the set-aside is partial');
   assert.deepEqual(p2.plan.yearlyAside.map((y) => y.amount), [5]);   // 45 − 40 of real bills
-  assert.equal(p2.plan.billsNeed, 60);
+  assert.equal(p2.plan.billsNeed, 45);
   const tiny = E.act.addPayday(s, { date: '2026-10-29', amount: 10, nextDate: '2026-11-12' }).plan;
   assert.equal(tiny.status, 'short');
   assert.deepEqual(tiny.yearlyAside, [], 'nothing left over for set-asides');
@@ -433,18 +439,29 @@ test('one big paycheck clears both debts; the overflow goes to savings', () => {
   const p = p2.plan;
   assert.equal(p.goals.total, 4350);
   // cushion 40; rest 4310 → debt part 3448: Store 475 + Visa 1184 = 1659; overflow 1789; save part 862.
-  assert.deepEqual(p.goals.debts.map((d) => [d.debtId, d.amount, d.clears]), [['store', 475, true], ['visa', 1184, true]]);
+  // The Store card step also takes its $25 minimum from the bills pile.
+  assert.deepEqual(p.goals.debts.map((d) => [d.debtId, d.amount, d.clears]), [['store', 500, true], ['visa', 1184, true]]);
   assert.equal(p.goals.savings, 40 + 862 + 1789);
   assert.equal(p.goals.stageAfter, 3);
   assert.match(item(p, 'save').why, /every debt/);
+  // Visa has no regular payment before the next payday, so this step alone pays it off.
+  assert.match(item(p, 'debt:visa').why, /This pays it off\.$/);
+  assert.match(item(p, 'debt:store').why, /including this month's regular payment/);
   assert.equal(itemsSum(p), 5000);
+});
+
+test('a very tight payday on the boat says "less than $1 a day", not cents', () => {
+  const { p2 } = afterP2(70);
+  assert.equal(p2.plan.status, 'tight');
+  assert.equal(item(p2.plan, 'spend').amount, 10);
+  assert.equal(item(p2.plan, 'spend').sub, 'less than $1 a day');
 });
 
 test('debtShare 1.0 and 0.2', () => {
   const all = afterP2Settings({ debtShare: 1 });
-  assert.deepEqual(all.goals.debts.map((d) => d.amount), [475, 835]);
+  assert.deepEqual(all.goals.debts.map((d) => d.amount), [500, 835]);
   assert.equal(all.goals.savings, 40);
-  assert.match(item(all, 'debt:store').why, /^All of your extra money/);
+  assert.match(item(all, 'debt:store').why, /^Everything left after bills and spending/);
   const little = afterP2Settings({ debtShare: 0.2 });
   assert.deepEqual(little.goals.debts.map((d) => [d.debtId, d.amount, d.clears]), [['store', 262, false]]);
   assert.equal(little.goals.savings, 40 + 1048);
@@ -486,7 +503,7 @@ test('no debts, cushion full: stage 3 and stage 4 wording', () => {
   s.savings = { amount: 1500, asOf: '2026-09-30' };
   const p = E.makePlan(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
   assert.equal(p.goals.stageBefore, 3);
-  assert.match(item(p, 'save').why, /You're debt-free! Extra money now grows your safety net to 3 months of expenses \(\$4,450\)/);
+  assert.match(item(p, 'save').why, /You're debt-free! Extra money now grows your safety net to 3 months of bills and spending \(\$4,450\)/);
   s.savings.amount = 10000;
   const q = E.makePlan(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
   assert.equal(q.goals.stageBefore, 4);
@@ -536,12 +553,12 @@ test('replay: tick / untick moves progress only when ticked', () => {
   assert.deepEqual(pd.ticks, {}, 'unknown key is ignored');
 });
 
-test('replay: check-ins override; same-day order by t', () => {
+test('replay: check-ins override; on the same day a check-in always comes after ticks', () => {
   const s = base();
   const pd = E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
   E.act.tick(s, pd.id, 'save', true, { d: '2026-10-01', t: 100 });
   E.act.addCheckin(s, { savings: 500 }, { d: '2026-10-01', t: 50 });
-  assert.equal(E.replay(s, '2026-10-01').savings, 1260, 'check-in first, then the tick adds 760');
+  assert.equal(E.replay(s, '2026-10-01').savings, 500, 'the check-in wins even when made before the tick');
   s.checkins[0].t = 200;
   assert.equal(E.replay(s, '2026-10-01').savings, 500, 'tick first, then the check-in sets 500');
   // Debt check-in replaces the estimate; a later due date works from it.
@@ -558,7 +575,7 @@ test('replay: check-ins override; same-day order by t', () => {
 test('replay: a check-in can re-open a paid-off debt (and zero one out)', () => {
   const { s, p2 } = afterP2();
   tickAll(s, p2, '2026-10-15');
-  assert.equal(E.replay(s, '2026-10-20').debts.store.paidOffOn, '2026-10-18');
+  assert.equal(E.replay(s, '2026-10-20').debts.store.paidOffOn, '2026-10-15');
   E.act.setDebtBalance(s, 'store', 120, { d: '2026-10-21', t: 1 });
   const r = E.replay(s, '2026-10-21');
   assert.equal(r.debts.store.balance, 120);
@@ -615,7 +632,7 @@ test('editPayday: fixing the amount does not double-count the edited payday\'s o
   const { s, p2 } = afterP2();
   E.act.editPayday(s, p2.id, { date: '2026-10-15', amount: 1900, nextDate: '2026-10-29' });
   assert.equal(s.paydays[1].plan.yearlyAside[0].amount, 20);
-  assert.equal(s.paydays[1].plan.billsNeed, 60);
+  assert.equal(s.paydays[1].plan.billsNeed, 35);   // Streaming 15 + set-aside 20 (Store card minimum is in its clearing step)
 });
 
 test('undoPayday restores balances and the checklist', () => {
@@ -772,12 +789,17 @@ test('project: a bigger paycheck means an earlier debt-free date', () => {
   assert.ok(dates.isValid(b.safeHarbor) && b.safeHarbor >= b.debtFree);
 });
 
-test('project: moves closer as extra payments are ticked', () => {
+test('project: the latest plan counts once entered; ticking keeps the date; paying more moves it closer', () => {
   const { s, p2 } = afterP2();
   const before = E.project(s, '2026-10-15');
   tickAll(s, p2, '2026-10-15');
   const after = E.project(s, '2026-10-15');
-  assert.ok(after.debtFree < before.debtFree, after.debtFree + ' < ' + before.debtFree);
+  assert.equal(after.debtFree, before.debtFree);
+  E.act.setDebtBalance(s, 'visa', 5000, now('2026-10-16'));
+  const big = E.project(s, '2026-10-16');
+  E.act.setDebtBalance(s, 'visa', 4000, now('2026-10-17'));
+  const more = E.project(s, '2026-10-17');
+  assert.ok(more.debtFree < big.debtFree, more.debtFree + ' < ' + big.debtFree);
 });
 
 test('project: debt-free date is when the LAST debt hits zero', () => {
@@ -869,7 +891,7 @@ test('no boat date: spending uses the blended daily rate', () => {
   assert.equal(p.spend.otherDaily, 40);          // (1400 + 280) / 42
   assert.equal(p.spend.amount, 560);
   assert.equal(item(p, 'spend').sub, 'about $40 a day');
-  assert.match(item(p, 'spend').why, /14 days × \$40/);
+  assert.match(item(p, 'spend').why, /14 days at about \$40 a day/);
   assert.equal(itemsSum(p), 2000);
 });
 
@@ -898,9 +920,9 @@ test('custom money formatter is used in every label', () => {
   const fmt = (n) => 'R' + E.round2(n).toFixed(0);
   const { s: s2, p2 } = afterP2();
   const plan = E.makePlan(s2, { date: '2026-10-15', amount: 2000, nextDate: '2026-10-29', excludeId: p2.id }, { money: fmt });
-  assert.equal(item(plan, 'bills').label, 'Leave R60 in checking for bills');
+  assert.equal(item(plan, 'bills').label, 'Leave R35 in checking for bills');
   assert.equal(item(plan, 'spend').label, 'Move R590 to your spending card');
-  assert.equal(item(plan, 'debt:store').label, 'Pay R475 extra on Store card — that clears it! 🎉');
+  assert.equal(item(plan, 'debt:store').label, 'Pay R500 on Store card — that clears it! 🎉');
   assert.equal(item(plan, 'save').label, 'Move R302 to savings');
   assert.match(plan.headline, /R1350/);
   plan.items.forEach((i) => assert.doesNotMatch(i.label + (i.sub || '') + i.why, /\$/));
@@ -984,7 +1006,9 @@ test('normalizeState / readBackup accept a real backup', () => {
   const r = E.readBackup(text, '2026-10-21');
   assert.equal(r.ok, true);
   assert.deepEqual(r.info, { exportedAt: '2026-10-20', paydays: 2, debts: 2 });
-  assert.deepEqual(r.state, JSON.parse(JSON.stringify(s)));
+  const expected = JSON.parse(JSON.stringify(s));
+  expected.meta.lastBackupAt = '2026-10-20';           // the backup records its own date
+  assert.deepEqual(r.state, expected);
   assert.equal(E.readBackup(JSON.parse(text), '2026-10-21').ok, true);
   const n = E.normalizeState(JSON.parse(JSON.stringify(s)), '2026-10-21');
   assert.equal(n.ok, true);
@@ -1055,4 +1079,287 @@ test('newState has the spec shape', () => {
   assert.deepEqual(Object.keys(s.meta).sort(),
     ['backupSnoozeUntil', 'celebrated', 'checkinSnoozeUntil', 'lastBackupAt', 'recapsShown', 'tips']);
   assert.ok(typeof E.uid() === 'string' && E.uid() !== E.uid());
+});
+
+// ---------------------------------------------------------------- review fixes
+
+// Check-in then a same-day tick: the check-in's real number already includes that payment.
+function checkinTickState() {
+  const s = E.newState('2026-09-01');
+  Object.assign(s.settings, { boatDate: '2026-09-08', payAmount: 2000, payFreq: 'biweekly', homeSpend: 1400, boatSpend: 280 });
+  s.debts = [{ id: 'visa', name: 'Visa', balance: 1200, asOf: '2026-09-01', minPayment: 40, dueDay: 10, rate: 0 }];
+  s.savings = { amount: 1000, asOf: '2026-09-01' };
+  s.setupDone = true;
+  return s;
+}
+
+test('fix: a tick on the same day as a check-in is absorbed by the check-in (debt)', () => {
+  const s = checkinTickState();
+  const p1 = E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }, { d: '2026-10-01', t: 10 });
+  const debt = p1.plan.items.find((i) => i.kind === 'debt');
+  assert.ok(debt);
+  ['bills', 'spend'].forEach((k) => E.act.tick(s, p1.id, k, true, { d: '2026-10-01', t: 11 }));
+  const real = 1200 - 40 - debt.amount;
+  assert.equal(real, 352);
+  E.act.addCheckin(s, { debts: { visa: real }, savings: null }, { d: '2026-10-15', t: 20 });
+  E.act.tick(s, p1.id, debt.key, true, { d: '2026-10-15', t: 30 });
+  const sm = E.summary(s, '2026-10-15');
+  assert.equal(sm.debts[0].balance, 352);
+  assert.equal(sm.debts[0].paidOffOn, null);
+  assert.ok(!sm.newMilestones.some((m) => m.key === 'debtfree' || m.key === 'paid:visa'));
+  const p2 = E.act.addPayday(s, { date: '2026-10-15', amount: 2000 }, { d: '2026-10-15', t: 40 });
+  assert.ok(p2.plan.items.some((i) => i.kind === 'debt' && i.debtId === 'visa'));
+});
+
+test('fix: a tick on the same day as a check-in is absorbed by the check-in (savings)', () => {
+  const s = base();
+  const pd = E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  E.act.addCheckin(s, { savings: 900 }, { d: '2026-10-05', t: 10 });
+  E.act.tick(s, pd.id, 'save', true, { d: '2026-10-05', t: 20 });
+  assert.equal(E.replay(s, '2026-10-05').savings, 900);
+  // A tick on a later day than the check-in still counts.
+  const t = base();
+  const pt = E.act.addPayday(t, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  E.act.addCheckin(t, { savings: 900 }, { d: '2026-10-05', t: 10 });
+  E.act.tick(t, pt.id, 'save', true, { d: '2026-10-06', t: 5 });
+  assert.equal(E.replay(t, '2026-10-06').savings, 1660);
+  const u = checkinTickState();
+  const pu = E.act.addPayday(u, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  const debt = pu.plan.items.find((i) => i.kind === 'debt');
+  E.act.addCheckin(u, { debts: { visa: 1000 } }, { d: '2026-10-12', t: 10 });
+  E.act.tick(u, pu.id, debt.key, true, { d: '2026-10-13', t: 1 });
+  assert.equal(E.replay(u, '2026-10-13').debts.visa.balance, E.round2(Math.max(0, 1000 - debt.amount)));
+});
+
+test('fix: "that clears it" pays the whole balance, including the regular payment due in the window', () => {
+  const s = base();
+  s.debts = [{ id: 'store', name: 'Store card', balance: 500, asOf: '2026-09-30', minPayment: 25, dueDay: 18, rate: null }];
+  s.savings = { amount: 1000, asOf: '2026-09-30' };
+  const pd = E.act.addPayday(s, { date: '2026-10-15', amount: 2000, nextDate: '2026-10-29' }, now('2026-10-15'));
+  const p = pd.plan;
+  const debts = p.items.filter((i) => i.kind === 'debt');
+  assert.equal(debts.length, 1);
+  assert.equal(debts[0].amount, 500);
+  assert.equal(debts[0].clears, true);
+  assert.equal(debts[0].label, 'Pay $500 on Store card — that clears it! 🎉');
+  assert.match(debts[0].why, /This pays off the whole balance, including this month's regular payment\.$/);
+  assert.equal(p.bills.find((b) => b.refId === 'store' && b.kind === 'min'), undefined);
+  assert.equal(p.billsNeed, E.round2(p.bills.reduce((a, b) => a + b.amount, 0) + p.yearlyAside.reduce((a, y) => a + y.amount, 0)));
+  assert.equal(itemsSum(p), 2000);
+  tickAll(s, pd, '2026-10-16');
+  const card = E.summary(s, '2026-10-16').debts.find((d) => d.id === 'store');
+  assert.equal(card.balance, 0);
+  assert.equal(card.paidOffOn, '2026-10-16');
+});
+
+test('fix: a clearing payment with interest is capped at today\'s balance; the rest goes to savings', () => {
+  const s = base();
+  s.debts = [{ id: 'card', name: 'Card', balance: 500, asOf: '2026-09-30', minPayment: 25, dueDay: 18, rate: 24 }];
+  s.savings = { amount: 1000, asOf: '2026-09-30' };
+  s.settings.debtShare = 1;
+  const pd = E.act.addPayday(s, { date: '2026-10-15', amount: 2000, nextDate: '2026-10-29' }, now('2026-10-15'));
+  const p = pd.plan;
+  const d = item(p, 'debt:card');
+  assert.equal(d.amount, 500);
+  assert.equal(d.clears, true);
+  assert.equal(p.bills.find((b) => b.refId === 'card'), undefined);
+  assert.ok(item(p, 'save').amount > 0);
+  assert.equal(p.goals.stageAfter, 3);
+  assert.equal(itemsSum(p), 2000);
+  tickAll(s, pd, '2026-10-15');
+  assert.equal(E.replay(s, '2026-10-15').debts.card.paidOffOn, '2026-10-15');
+});
+
+test('fix: skipping the spending question still gives a real safety-net target', () => {
+  const mk = () => {
+    const s = E.newState('2026-09-30');
+    Object.assign(s.settings, { boatDate: '2026-09-08', payAmount: 2000, payFreq: 'biweekly', homeSpend: null, boatSpend: null });
+    s.bills = [{ id: 'ph', name: 'Phone', amount: 80, freq: 'monthly', dueDay: 12 },
+      { id: 'ins', name: 'Insurance', amount: 150, freq: 'monthly', dueDay: 5 }];
+    s.savings = { amount: 900, asOf: '2026-09-30' };
+    s.setupDone = true;
+    return s;
+  };
+  const s = mk();
+  const typed = mk();
+  const sug = E.suggestSpending(typed);
+  typed.settings.homeSpend = sug.home; typed.settings.boatSpend = sug.boat;
+  assert.equal(E.safetyTarget(typed), 6890);
+  assert.equal(E.safetyTarget(s), 6890);
+  assert.equal(E.summary(s, '2026-10-01').monthlyExpenses, E.summary(typed, '2026-10-01').monthlyExpenses);
+  const p = E.act.addPayday(s, { date: '2026-10-01', amount: 2000 }, now('2026-10-01'));
+  tickAll(s, p, '2026-10-01');
+  const st = E.summary(s, '2026-10-02').stage;
+  assert.ok(st === 2 || st === 3, 'stage ' + st);
+  // No normal paycheck set: the average of logged paydays is used.
+  const t = mk();
+  t.settings.payAmount = null;
+  E.act.addPayday(t, { date: '2026-10-01', amount: 2000 }, now('2026-10-01'));
+  assert.equal(E.safetyTarget(t), 6890);
+});
+
+test('fix: a paycheck up to a month late still lists the bills due in the gap', () => {
+  const s = base();
+  s.bills.push({ id: 'gym', name: 'Gym', amount: 60, freq: 'monthly', dueDay: 17, dueMonth: null });
+  const p1 = E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }, now('2026-10-01'));
+  tickAll(s, p1, '2026-10-01');
+  const p = E.act.addPayday(s, { date: '2026-10-27', amount: 2000, nextDate: '2026-11-10' }, now('2026-10-27')).plan;
+  assert.equal(p.window.billsFrom, '2026-10-16');
+  const gym = p.bills.find((b) => b.refId === 'gym');
+  assert.equal(gym.due, '2026-10-17');
+  assert.equal(gym.past, true);
+  assert.equal(p.bills.find((b) => b.refId === 'store' && b.due === '2026-10-18').past, true);
+  assert.match(item(p, 'bills').why, / Some of these were due before today, so pay them now if you haven't yet\.$/);
+  assert.equal(itemsSum(p), 2000);
+});
+
+test('fix: a yearly bill due in a late paycheck\'s gap is listed with what\'s still unfunded', () => {
+  const s = base();
+  s.debts = [];
+  s.bills.push({ id: 'lic', name: 'License', amount: 120, freq: 'yearly', dueDay: 18, dueMonth: 10 });
+  const p1 = E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }, now('2026-10-01'));
+  const aside = p1.plan.yearlyAside.find((y) => y.billId === 'lic');
+  assert.ok(aside && aside.amount > 0 && aside.amount < 120);
+  const p = E.act.addPayday(s, { date: '2026-10-27', amount: 2000, nextDate: '2026-11-10' }, now('2026-10-27')).plan;
+  const lic = p.bills.find((b) => b.refId === 'lic');
+  assert.equal(lic.due, '2026-10-18');
+  assert.equal(lic.past, true);
+  assert.equal(lic.amount, E.round2(120 - aside.amount));
+});
+
+test('fix: moving the boat date later while home keeps counting from the day you got home', () => {
+  const s = base();                                   // boat Sep 8 → home since Oct 6
+  E.act.setBoatDate(s, '2026-10-27', '2026-10-15');
+  assert.equal(s.settings.homeSince, '2026-10-06');
+  const st = E.rotation.status(s.settings, '2026-10-15');
+  assert.equal(st.where, 'home');
+  assert.equal(st.day, 10);
+  assert.equal(st.of, 21);
+  assert.equal(st.stretchStart, '2026-10-06');
+  assert.equal(st.changeDate, '2026-10-27');
+  // Moving it again while still before the new date keeps the same homecoming.
+  E.act.setBoatDate(s, '2026-10-29', '2026-10-16');
+  assert.equal(s.settings.homeSince, '2026-10-06');
+  assert.equal(E.rotation.status(s.settings, '2026-10-16').of, 23);
+  // Survives a backup round trip.
+  assert.equal(E.normalizeState(JSON.parse(JSON.stringify(s)), '2026-10-16').state.settings.homeSince, '2026-10-06');
+  // A past (or today's) boat date clears it.
+  E.act.setBoatDate(s, '2026-10-16', '2026-10-16');
+  assert.equal(s.settings.homeSince, null);
+  E.act.setBoatDate(s, '2026-10-27', '2026-10-17');   // on the boat now: not home
+  assert.equal(s.settings.homeSince, null);
+  // No "today" given: old behaviour.
+  const t = base();
+  E.act.setBoatDate(t, '2026-10-27');
+  assert.equal(t.settings.homeSince, null);
+  assert.equal(E.newState('2026-09-30').settings.homeSince, null);
+});
+
+test('fix: every bill covered but not the whole yearly set-aside is "tight", not "short"', () => {
+  const s = base();
+  const p = E.act.addPayday(s, { date: '2026-10-01', amount: 280, nextDate: '2026-10-15' }, now('2026-10-01')).plan;
+  assert.equal(E.round2(p.bills.reduce((a, b) => a + b.amount, 0)), 270);
+  assert.equal(p.status, 'tight');
+  assert.equal(p.shortBy, 0);
+  assert.equal(p.note, null);
+  assert.match(p.headline, /Bills are covered/);
+  assert.equal(E.round2(p.yearlyAside.reduce((a, y) => a + y.amount, 0)), 10);
+  assert.equal(p.billsNeed, 280);
+  assert.equal(itemsSum(p), 280);
+  // Still short when the real bills aren't covered; shortBy counts real bills only.
+  const q = E.makePlan(base(), { date: '2026-10-01', amount: 250, nextDate: '2026-10-15' });
+  assert.equal(q.status, 'short');
+  assert.equal(q.shortBy, 20);
+  assert.deepEqual(q.yearlyAside, []);
+});
+
+test('fix: the debt-free date doesn\'t jump later just because a payday was entered', () => {
+  const s = base();
+  s.debts[0].balance = 9000; s.debts[0].minPayment = 250;
+  s.debts[1].balance = 4000; s.debts[1].minPayment = 120;
+  s.savings.amount = 1000;
+  let d = '2026-10-01';
+  for (let i = 0; i < 12; i++) {
+    const next = dates.addDays(d, 14);
+    const pd = E.act.addPayday(s, { date: d, amount: 2000, nextDate: next }, now(d));
+    const entered = E.project(s, d);
+    tickAll(s, pd, d);
+    const ticked = E.project(s, d);
+    assert.equal(entered.debtFree, ticked.debtFree, 'payday ' + d);
+    d = next;
+  }
+  // Unticked money never makes Today claim debt-free early.
+  const t = base();
+  t.debts = [{ id: 'x', name: 'Tiny', balance: 100, asOf: '2026-09-30', minPayment: 10, dueDay: 25, rate: 0 }];
+  t.savings.amount = 1000;
+  E.act.addPayday(t, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }, now('2026-10-01'));
+  const r = E.project(t, '2026-10-01');
+  assert.equal(r.alreadyDebtFree, false);
+  assert.ok(r.debtFree);
+});
+
+test('fix: a restored backup knows when it was made, so it doesn\'t nag right away', () => {
+  const { s } = afterP1();
+  s.meta.backupSnoozeUntil = '2026-10-20';
+  const r = E.readBackup(E.makeBackup(s, '2026-10-16'), '2026-10-16');
+  assert.equal(r.ok, true);
+  assert.equal(r.state.meta.lastBackupAt, '2026-10-16');
+  assert.equal(r.state.meta.backupSnoozeUntil, null);
+  assert.equal(E.summary(r.state, '2026-10-16').backupDue, false);
+  assert.equal(s.meta.lastBackupAt, null, 'the live state is not changed');
+});
+
+test('fix: month-end paydays keep landing on the month end', () => {
+  const chain = (payFreq, start, n) => {
+    const out = [];
+    let d = start;
+    for (let i = 0; i < n; i++) { d = E.pay.guessNext({ payFreq }, d); out.push(d); }
+    return out;
+  };
+  assert.deepEqual(chain('monthly', '2027-01-31', 3), ['2027-02-28', '2027-03-31', '2027-04-30']);
+  assert.deepEqual(chain('semimonthly', '2027-01-15', 5), ['2027-01-31', '2027-02-15', '2027-02-28', '2027-03-15', '2027-03-31']);
+  assert.equal(E.pay.guessNext({ payFreq: 'monthly' }, '2027-01-15'), '2027-02-15');
+  assert.equal(E.pay.guessNext({ payFreq: 'monthly' }, '2027-01-30'), '2027-02-28');
+});
+
+test('fix: plain, accurate wording in whys and milestones', () => {
+  // A tiny last debt paid off by its own regular payment: not "debt-free" yet.
+  const s = E.newState('2026-09-30');
+  Object.assign(s.settings, { boatDate: '2026-09-08', payAmount: 2000, payFreq: 'biweekly', homeSpend: 1400, boatSpend: 280 });
+  s.debts = [{ id: 'a', name: 'Store card', balance: 30, asOf: '2026-09-30', minPayment: 50, dueDay: 10, rate: 0 },
+    { id: 'b', name: 'Visa', balance: 900, asOf: '2026-09-30', minPayment: 40, dueDay: 20, rate: 20 }];
+  s.savings = { amount: 1000, asOf: '2026-09-30' };
+  let p = E.makePlan(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  assert.equal(item(p, 'bills').why, 'Your Store card minimum is due before your next payday, so this stays put to cover it.');
+  assert.equal(item(p, 'spend').why, '9 days at home at about $100 a day, plus 5 days on the boat at about $10 a day. ' +
+    'Home days get more because that\'s when life costs more.');
+  assert.equal(item(p, 'debt:b').why, '80% of what\'s left after bills and spending goes to one debt at a time, smallest first, for quick wins.');
+  assert.equal(item(p, 'save').why, '20% keeps growing your safety net while you crush debt.');
+  s.debts = [s.debts[0]];
+  p = E.makePlan(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  assert.equal(item(p, 'save').why, 'Your last debt gets paid off by its regular payment before your next payday, so extra money ' +
+    'now grows your safety net to 3 months of bills and spending ($3,650).');
+  // One open debt: name it.
+  const one = base();
+  one.debts = [one.debts[0]];
+  one.savings.amount = 1000;
+  const q = E.makePlan(one, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  assert.equal(item(q, 'debt:visa').why, '80% of what\'s left after bills and spending goes to Visa until it\'s gone.');
+  one.settings.debtShare = 1;
+  const q1 = E.makePlan(one, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  assert.match(item(q1, 'debt:visa').why, /^Everything left after bills and spending goes to Visa until it's gone\./);
+  // Only one kind of day: no home/boat comparison.
+  const nb = E.makePlan(base({ settings: { boatDate: null } }), { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
+  assert.equal(item(nb, 'spend').why, '14 days at about $40 a day. That\'s enough for groceries, gas and fun until your next payday.');
+  [p, q, nb].forEach((x) => x.items.forEach((i) => assert.doesNotMatch(i.why, /×|\+| — /)));
+  // Cushion milestone points at what's really next.
+  const withDebt = base();
+  withDebt.savings.amount = 1000;
+  assert.equal(E.milestones(withDebt, '2026-10-01').find((x) => x.key === 'cushion').message,
+    'You\'ve got $1,000 set aside for surprises. Next up: crushing your debts.');
+  const noDebt = base();
+  noDebt.debts = [];
+  noDebt.savings.amount = 1000;
+  assert.equal(E.milestones(noDebt, '2026-10-01').find((x) => x.key === 'cushion').message,
+    'You\'ve got $1,000 set aside for surprises. Next up: growing your full safety net.');
 });

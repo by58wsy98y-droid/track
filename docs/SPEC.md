@@ -199,8 +199,8 @@ and the other paydays (excluding `excludeId`, only those with `date <= input.dat
 
 **Windows**
 - `prevBillsTo` = max `plan.window.billsTo` of other paydays; `prevSpendTo` = max `plan.window.spendTo`.
-- `billsFrom` = `prevBillsTo ? max(prevBillsTo + 1, date − 7) : date`; `billsTo = nextDate` (inclusive).
-  (Bills due ON the next payday are covered now — safer against overdrafts. The 7-day catch-up covers a late paycheck.)
+- `billsFrom` = `prevBillsTo ? max(prevBillsTo + 1, date − 31) : date`; `billsTo = nextDate` (inclusive).
+  (Bills due ON the next payday are covered now — safer against overdrafts. The 31-day catch-up covers a late paycheck; bills due before today are flagged `past`.)
 - `spendFrom` = `prevSpendTo ? max(prevSpendTo + 1, date) : date`; `spendTo = nextDate − 1`.
 
 **1. Bills** (list each occurrence in `[billsFrom, billsTo]`):

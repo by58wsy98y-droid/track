@@ -69,9 +69,9 @@ const P1 = [
   ['Move $760 to savings', 760],
 ];
 const P2 = [
-  ['Leave $60 in checking for bills', 60],
+  ['Leave $35 in checking for bills', 35],
   ['Move $590 to your spending card', 590],
-  ['Pay $475 extra on Store card — that clears it! 🎉', 475],
+  ['Pay $500 on Store card — that clears it! 🎉', 500],
   ['Pay $573 extra on Visa', 573],
   ['Move $302 to savings', 302],
 ];
@@ -264,17 +264,71 @@ async function runDevice(browser, srv, deviceName) {
     assert.deepEqual(await r.labels(), P2.map((x) => x[0]));
     assert.deepEqual(await r.planItems(), P2);
     await page.click('[data-action=flowClose]');
-    // Tick from the Today screen this time.
     await page.waitForSelector('.next-card .tick');
-    assert.match(await page.textContent('.next-card .card-count'), /0 of 5 done/);
+    assert.equal(await page.$('.remind'), null, 'no reminders under an open checklist');
+
+    // A schedule change re-plans the open payday's spending money (nothing ticked yet)…
+    const spendOf = async () => (await r.state()).paydays[1].plan.items.find((i) => i.kind === 'spend').amount;
+    const setBoat = async (iso) => {
+      await page.click('[data-action=rotation]');
+      await page.fill('#r-date', iso);
+      await page.dispatchEvent('#r-date', 'change');
+      await page.click('.layer button[type=submit]');
+      await page.waitForSelector('.layer', { state: 'detached' });
+      await page.waitForTimeout(100);
+      const t = await page.textContent('#toast');
+      await r.dismissPopups();
+      return t;
+    };
+    let toastText = await setBoat('2026-10-27');
+    assert.notEqual(await spendOf(), 590, 'spending money follows the new home days');
+    assert.equal(toastText, 'Got it. Your spending money for this payday is now ' + '$' + (await spendOf()).toLocaleString('en-US') + '.');
+    assert.match(await page.textContent('.banner-text'), /Day 10 of 21/);
+    // …and moving it back gives the original plan again.
+    toastText = await setBoat('2026-09-08');
+    assert.equal(toastText, 'Got it. Your spending money for this payday is now $590.');
+    assert.deepEqual(await r.planItems(), P2);
+
+    // The check-in asks about undone steps first; ticking one with no balances typed just saves the tick.
+    await page.click('.tab[data-to=settings]');
+    await page.click('.group [data-action=checkin]');
+    await page.waitForSelector('.layer .ci-pending');
+    assert.deepEqual(await page.$$eval('.layer .check-row', (e) => e.map((x) => x.textContent)),
+      P2.slice(2).map((x) => x[0]));
+    await page.click('.layer .check-row >> text=Visa');
+    await page.click('.layer button[type=submit]');
+    await page.waitForSelector('.layer', { state: 'detached' });
+    assert.equal(await page.textContent('#toast'), 'Saved.');
+    const stTick = await r.state();
+    assert.equal(stTick.checkins.length, 0, 'no check-in saved without balances');
+    assert.deepEqual(Object.keys(stTick.paydays[1].ticks), ['debt:' + stTick.debts[0].id]);
+    await r.dismissPopups();
+    await page.click('.tab[data-to=today]');
+
+    // Tick the rest from the Today screen.
+    await page.waitForSelector('.next-card .tick');
+    assert.match(await page.textContent('.next-card .card-count'), /1 of 5 done/);
     const celebrated = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
       await page.click('.next-card .tick[aria-checked=false] >> nth=0');
       await page.waitForTimeout(250);
       celebrated.push(...(await r.dismissPopups()));
     }
     assert.ok(celebrated.includes('Starter cushion reached!'), 'cushion celebration: ' + celebrated.join(', '));
     assert.match(await page.textContent('.next-card'), /Everything from your Oct 15 payday is done/);
+
+    // Opened in a browser tab on an iPhone/iPad: one reminder, the Safari one, once the checklist is done.
+    assert.equal(await page.$$eval('.remind', (e) => e.length), 1);
+    assert.match(await page.textContent('.remind'), /Harbor is open in Safari/);
+    await page.click('.remind [data-action=safariHow]');
+    await page.waitForSelector('.layer .safe-steps');
+    assert.equal(await page.$$eval('.layer .safe-steps li', (e) => e.length), 3);
+    assert.match(await page.textContent('.layer'), /Open as Web App/);
+    await page.click('.layer [data-la=close]');
+    await page.waitForSelector('.layer', { state: 'detached' });
+    await page.click('.remind [data-action=safariLater]');
+    assert.equal(await page.$$eval('.remind', (e) => e.length), 1, 'the next reminder takes the slot');
+    assert.doesNotMatch(await page.textContent('.remind'), /Safari/);
 
     // ------------------------------------------------------------ 5. Voyage + Settings
     await page.click('.tab[data-to=voyage]');
@@ -293,6 +347,23 @@ async function runDevice(browser, srv, deviceName) {
     assert.ok(await page.$('#f-share'), 'debt/savings slider');
     await r.noSideScroll('settings');
 
+    // Changing a debt's minimum doesn't rewrite its past: today's balance stays put.
+    const visaLeft = async () => {
+      await page.click('.tab[data-to=voyage]');
+      await page.waitForSelector('.v-debt');
+      const t = await page.$$eval('.v-debt', (e) => e.filter((x) => /Visa/.test(x.textContent)).map((x) => x.querySelector('.v-debt-amt').textContent)[0]);
+      await page.click('.tab[data-to=settings]');
+      await page.waitForSelector('.page-title');
+      return t;
+    };
+    const visaBefore = await visaLeft();
+    await page.click('.group [data-action=editDebt] >> text=Visa');
+    await page.fill('#d-min', '60');
+    await page.click('.layer button[type=submit]');
+    await page.waitForSelector('.layer', { state: 'detached' });
+    assert.equal((await r.state()).debts[0].minPayment, 60);
+    assert.equal(await visaLeft(), visaBefore, 'Visa balance unchanged after editing its minimum');
+
     // ------------------------------------------------------------ 6. check-in (real balances)
     await page.click('.group [data-action=checkin]');
     await page.waitForSelector('.layer [id^=ci-]');
@@ -302,15 +373,19 @@ async function runDevice(browser, srv, deviceName) {
     await page.click('.layer button[type=submit]');
     await page.waitForSelector('.layer', { state: 'detached' });
     const st2 = await r.state();
-    assert.equal(st2.checkins.length, 1);
-    assert.equal(st2.checkins[0].debts[visaId], 600);
-    assert.equal(st2.checkins[0].savings, null, 'untouched savings field is not saved');
+    assert.equal(st2.checkins.length, 2, 'the minimum change pinned a balance, then the check-in');
+    assert.equal(st2.checkins[1].debts[visaId], 600);
+    assert.equal(st2.checkins[1].savings, null, 'untouched savings field is not saved');
 
     // ------------------------------------------------------------ 7. a paycheck that barely covers bills → kind 'tight'
     await r.at('2026-10-29');
-    await r.dismissPopups();   // e.g. "Store card: PAID OFF!" (its last minimum went out Oct 18)
-    const need = await page.evaluate(() => window.Engine.makePlan(window.Harbor.state,
-      { date: '2026-10-29', amount: 100000, nextDate: '2026-11-12' }).billsNeed);
+    await r.dismissPopups();   // e.g. "Store card: PAID OFF!" (cleared by its Oct 15 step)
+    // Every bill due (from a plan too small to clear any debt) plus the full yearly set-aside.
+    const need = await page.evaluate(() => {
+      const plan = (amount) => window.Engine.makePlan(window.Harbor.state, { date: '2026-10-29', amount, nextDate: '2026-11-12' });
+      const sum = (list) => list.reduce((a, x) => a + x.amount, 0);
+      return sum(plan(1).bills) + sum(plan(100000).yearlyAside);
+    });
     const tightAmount = Math.ceil(need) + 25;
     await page.click('[data-action=startPayday]');
     await page.fill('#p-amt', String(tightAmount));
@@ -364,7 +439,7 @@ async function runDevice(browser, srv, deviceName) {
     const st3 = await r.state();
     assert.equal(st3.setupDone, true);
     assert.equal(st3.paydays.length, 2);
-    assert.equal(st3.checkins.length, 1);
+    assert.equal(st3.checkins.length, 2);
     await page.reload();
     await page.waitForSelector('.banner');
     assert.equal((await r.state()).paydays.length, 2, 'restored data persisted');
@@ -399,6 +474,30 @@ async function runDevice(browser, srv, deviceName) {
 
 // ---------------------------------------------------------------- the tests
 let srv, browser;
+
+// One missing precached file makes cache.addAll fail, and then the app never works offline.
+test('offline file list (sw.js APP_FILES) matches the files on disk and in index.html', () => {
+  const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  const m = sw.match(/const APP_FILES = (\[[\s\S]*?\]);/);
+  assert.ok(m, 'APP_FILES array found in sw.js');
+  const files = JSON.parse(m[1].replace(/'/g, '"').replace(/,\s*\]$/, ']'));
+  const norm = (u) => { u = u.replace(/^\.\//, ''); return u === '' ? 'index.html' : u; };
+  for (const f of files) {
+    assert.ok(fs.existsSync(path.join(ROOT, norm(f))), 'precached file exists: ' + f);
+  }
+  const listed = new Set(files.map(norm));
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const refs = [];
+  for (const t of html.match(/<script\b[^>]*\bsrc="[^"]+"/g) || []) refs.push(t.match(/src="([^"]+)"/)[1]);
+  for (const t of html.match(/<link\b[^>]*>/g) || []) {
+    if (/rel="(stylesheet|manifest|icon|apple-touch-icon)"/.test(t)) refs.push(t.match(/href="([^"]+)"/)[1]);
+  }
+  assert.ok(refs.length >= 5, 'found the page\'s scripts and links');
+  for (const r of refs) {
+    if (/^(https?:)?\/\//.test(r)) continue;   // not local
+    assert.ok(listed.has(norm(r)), 'index.html uses ' + r + ' but sw.js doesn\'t precache it');
+  }
+});
 
 test('Harbor end to end', { timeout: 240000 }, async (t) => {
   srv = await startServer();
