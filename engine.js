@@ -271,14 +271,14 @@
   const BUILTIN_IDS = { checking: true, spending: true, savings: true };
   const MONEY_KINDS = { checking: true, cash: true, other: true };   // plain balances adjusted by events
   const CATEGORIES = [
-    { key: 'eat', emoji: '🍔', label: 'Eating out' },
-    { key: 'delivery', emoji: '🛵', label: 'Delivery' },
-    { key: 'groceries', emoji: '🛒', label: 'Groceries' },
-    { key: 'gas', emoji: '⛽', label: 'Gas' },
-    { key: 'fun', emoji: '🎉', label: 'Going out' },
-    { key: 'shopping', emoji: '🛍️', label: 'Shopping' },
-    { key: 'travel', emoji: '✈️', label: 'Travel' },
-    { key: 'other', emoji: '📦', label: 'Other' },
+    { key: 'eat', emoji: '★', label: 'Eating out' },
+    { key: 'delivery', emoji: '★', label: 'Delivery' },
+    { key: 'groceries', emoji: '★', label: 'Groceries' },
+    { key: 'gas', emoji: '★', label: 'Gas' },
+    { key: 'fun', emoji: '★', label: 'Going out' },
+    { key: 'shopping', emoji: '★', label: 'Shopping' },
+    { key: 'travel', emoji: '★', label: 'Travel' },
+    { key: 'other', emoji: '★', label: 'Other' },
   ];
   const CAT = {};
   CATEGORIES.forEach((c) => { CAT[c.key] = c; });
@@ -906,7 +906,7 @@
       const how1 = ctx.openDebts === 1 ? ' goes to ' + d.name + ' until it\'s gone.' : how;
       const whole = d.clears && ctx.folded && ctx.folded[d.debtId] > 0;
       const it = { key: 'debt:' + d.debtId, kind: 'debt', amount: d.amount,
-        label: 'Pay ' + m(d.amount) + (whole ? ' on ' : ' extra on ') + d.name + (d.clears ? ' — that clears it! 🎉' : ''),
+        label: 'Pay ' + m(d.amount) + (whole ? ' on ' : ' extra on ') + d.name + (d.clears ? ' — that clears it!' : ''),
         why: lead + how1 + (whole ? ' This pays off the whole balance, including this month\'s regular payment.'
           : d.clears ? ' This pays it off.' : ''),
         debtId: d.debtId, clears: !!d.clears };
@@ -1039,6 +1039,9 @@
       debtFree: alreadyDebtFree ? (paidDates[paidDates.length - 1] || today) : null,
       safeHarbor: null, alreadyDebtFree,
     };
+    // Optional trace for the chart (§11.5): one point per simulated payday.
+    const trace = pre && pre.trace ? [] : null;
+    if (trace) res.trace = trace;
     if (alreadyDebtFree && bal.savings >= target - 0.5) { res.safeHarbor = today; return res; }
 
     const paydays = state.paydays || [];
@@ -1113,6 +1116,7 @@
         if (d.balance <= EPS) d.balance = 0;
       });
       savings = round2(savings + wf.savings);
+      if (trace) trace.push({ date: p, debt: sum(debts, (d) => d.balance), savings });
       markDebtFree(p);
       if (res.debtFree && savings >= target - 0.5) { res.safeHarbor = p; return res; }
       billsFrom = D.addDays(next, 1);
@@ -1166,23 +1170,23 @@
     const out = [];
     const add = (key, emoji, title, message) => out.push({ key, emoji, title, message });
     if ((state.paydays || []).some(isComplete)) {
-      add('first', '🎉', 'First payday done!', 'You followed your plan for a whole payday. That\'s the hardest part, and you did it.');
+      add('first', '★', 'First payday done!', 'You followed your plan for a whole payday. That\'s the hardest part, and you did it.');
     }
     if (ctx.savings >= ctx.cushion - 0.5 && ctx.cushion > 0) {
-      add('cushion', '🛟', 'Starter cushion reached!', 'You\'ve got ' + m(ctx.cushion) + ' set aside for surprises. Next up: ' +
+      add('cushion', '★', 'Starter cushion reached!', 'You\'ve got ' + m(ctx.cushion) + ' set aside for surprises. Next up: ' +
         (ctx.openOrdered.length > 0 ? 'crushing your debts.' : 'growing your full safety net.'));
     }
     ctx.debts.filter((d) => !d.open).forEach((d) => {
-      add('paid:' + d.id, '🏝️', d.name + ': PAID OFF!', d.name + ' is gone for good. One less thing to carry.');
+      add('paid:' + d.id, '★', d.name + ': PAID OFF!', d.name + ' is gone for good. One less thing to carry.');
     });
     if (ctx.totalDebtStart > 0 && ctx.totalDebtNow <= ctx.totalDebtStart * 0.5) {
-      add('halfway', '🧭', 'Halfway to debt-free!', 'Your debts are half the size they were when you started. Keep sailing.');
+      add('halfway', '★', 'Halfway to debt-free!', 'Your debts are half the size they were when you started. Keep going.');
     }
     if (ctx.debts.length > 0 && ctx.openOrdered.length === 0) {
-      add('debtfree', '🏁', 'DEBT-FREE!', 'You don\'t owe anyone anything. From now on, extra money builds your safety net.');
+      add('debtfree', '★', 'DEBT-FREE!', 'You don\'t owe anyone anything. From now on, extra money builds your safety net.');
     }
     if (ctx.stage === 4) {
-      add('harbor', '⚓', 'Safe Harbor!', 'Your safety net is full. You made it to Safe Harbor.');
+      add('harbor', '★', 'Safe Harbor!', 'Your safety net is full. You made it to Safe Harbor.');
     }
     return out;
   }
@@ -1295,6 +1299,7 @@
       daysLeft: days.daysLeft, homeDays: days.home, boatDays: days.boat, otherDays: days.other,
       perDay: per.perDay, perHome: per.perHome, perBoat: per.perBoat,
       need, sub, status, overText, carried, potStart: bal.potStart,
+      spentToday: sum(all.filter((p) => p.date === today), (p) => num(p.amount)),
       recent, places,
     };
   }
@@ -1396,7 +1401,7 @@
   }
   function compareText(diff, m) {
     if (Math.abs(diff) < 0.5) return 'About the same as last time';
-    return diff < 0 ? m(-diff) + ' less than last time 🎉' : m(diff) + ' more than last time';
+    return diff < 0 ? m(-diff) + ' less than last time' : m(diff) + ' more than last time';
   }
 
   function stretchSpending(state, today, bal) {
@@ -1454,7 +1459,7 @@
       compare = { previousTotal, diff, text: compareText(diff, m), start: prev.start, end: prev.end };
     }
     return { key: last.start, where: last.where,
-      title: last.where === 'boat' ? 'Welcome home!' : 'Back out to sea ⚓',
+      title: last.where === 'boat' ? 'Welcome home!' : 'Back out to sea',
       start: last.start, end: last.end, debtPaid, saved, paidOff,
       paydays: pds.length, ticked, total, spent, compare };
   }
@@ -1520,6 +1525,75 @@
     return { stops, position };
   }
 
+  // ---------------------------------------------------------------- terminal additions (§11.5)
+
+  // Total of the debts that existed on `date` (a debt added later isn't counted before it was added).
+  function debtAsOf(state, id) { const d = (state.debts || []).find((x) => x.id === id); return d ? d.asOf : null; }
+
+  function debtOn(state, bal, date) {
+    return sum((state.debts || []).filter((d) => !D.isValid(d.asOf) || d.asOf <= date), (d) => bal.debts[d.id].balance);
+  }
+
+  // Debt and savings over time for the chart: the past from the replay, the future from the projection.
+  function series(state, today, pre) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    const bal = (pre && pre.balances) || replay(state, today);
+    const proj = (pre && pre.projection && pre.projection.trace) ? pre.projection : project(state, today, { balances: bal, trace: true });
+    const start = D.isValid(state.createdAt) && state.createdAt < today ? state.createdAt : today;
+    const span = D.diffDays(start, today);
+    const step = Math.max(7, Math.ceil(span / 100 / 7) * 7);    // weekly, coarser for long histories
+    const dates = [];
+    for (let d = start; d < today; d = D.addDays(d, step)) dates.push(d);
+    dates.push(today);
+    const past = dates.map((d) => {
+      const b = d === today ? bal : replay(state, d);
+      return { date: d, debt: debtOn(state, b, d), savings: round2(b.savings) };
+    });
+    const last = D.addDays(today, 1096);                           // at most 3 years ahead
+    let future = (proj.trace || []).filter((x) => x.date > today && x.date <= last &&
+      (!proj.safeHarbor || x.date <= proj.safeHarbor));
+    if (future.length > 80) {
+      const n = future.length;
+      future = Array.from({ length: 80 }, (_, i) => future[Math.round(i * (n - 1) / 79)]);
+    }
+    future = future.map((x) => ({ date: x.date, debt: round2(x.debt), savings: round2(x.savings) }));
+    return { past, future, debtFree: proj.debtFree || null, safeHarbor: proj.safeHarbor || null };
+  }
+
+  // The ticker strip: spending money, each open debt and savings, with how much each moved.
+  function ticker(state, today, pre) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    const bal = (pre && pre.balances) || replay(state, today);
+    const sp = (pre && pre.spending) || spending(state, today, null, bal);
+    const latest = latestPayday(state);
+    const ref = latest && latest.date <= today ? latest.date : D.addDays(today, -14);
+    const before = replay(state, D.addDays(ref, -1));
+    const items = [];
+    if (sp.started) {
+      items.push({ key: 'spend', label: 'SPEND', value: round2(sp.left), change: round2(-sp.spentToday), good: !(sp.spentToday > 0) });
+    }
+    const ctxDebts = (pre && pre.debts) || context(state, today).debts;
+    ctxDebts.filter((d) => d.open).forEach((d) => {
+      const asOf = debtAsOf(state, d.id);
+      const was = D.isValid(asOf) && asOf > ref ? d.start : before.debts[d.id].balance;
+      const change = round2(bal.debts[d.id].balance - was);
+      items.push({ key: 'debt:' + d.id, label: String(d.name).toUpperCase(), value: bal.debts[d.id].balance, change, good: change <= EPS });
+    });
+    const sch = round2(bal.savings - before.savings);
+    items.push({ key: 'savings', label: 'SAVINGS', value: round2(bal.savings), change: sch, good: sch >= -EPS });
+    return items;
+  }
+
+  function stageInfo(ctx) {
+    const frac = (a, b) => (b > 0 ? Math.max(0, Math.min(1, a / b)) : 1);
+    return {
+      stage: ctx.stage,
+      cushionFrac: frac(ctx.savings, ctx.cushion),
+      debtFrac: ctx.totalDebtStart > 0 ? Math.max(0, Math.min(1, 1 - ctx.totalDebtNow / ctx.totalDebtStart)) : 1,
+      safetyFrac: frac(ctx.savings, ctx.target),
+    };
+  }
+
   function summary(state, today, opts) {
     if (!D.isValid(today)) today = D.todayLocal();
     const m = (opts && opts.money) || money;
@@ -1529,6 +1603,8 @@
     const openItems = latest ? (latest.plan.items || []).filter((it) => it.amount > 0 && !isTicked(latest, it.key)) : [];
     const celebrated = (state.meta && state.meta.celebrated) || {};
     const jarTarget = ctx.stage === 1 ? ctx.cushion : ctx.target;
+    const proj = project(state, today, { balances: ctx.balances, trace: true });
+    const sp = spending(state, today, opts, ctx.balances);
     return {
       rotation: rotation.status(ctx.s, today),
       balances: ctx.balances,
@@ -1537,7 +1613,9 @@
       stage: ctx.stage, stageName: STAGE_NAMES[ctx.stage],
       debts: ctx.debts,
       totalDebtStart: ctx.totalDebtStart, totalDebtNow: ctx.totalDebtNow,
-      projection: project(state, today, { balances: ctx.balances }),
+      projection: proj,
+      series: series(state, today, { balances: ctx.balances, projection: proj }),
+      stageInfo: stageInfo(ctx),
       voyage: voyage(ctx, m),
       jar: {
         amount: ctx.savings, target: jarTarget,
@@ -1549,7 +1627,8 @@
       streak: streak(state),
       newMilestones: milestones(state, today, opts, ctx).filter((x) => !celebrated[x.key]),
       recap: recap(state, today, ctx, m),
-      spending: spending(state, today, opts, ctx.balances),
+      spending: sp,
+      ticker: ticker(state, today, { balances: ctx.balances, spending: sp, debts: ctx.debts }),
       accounts: accountsList(state, today, ctx.balances),
       stretch: stretchSpending(state, today, ctx.balances),
       checkinDue: checkinDue(state, today, ctx),
@@ -1948,7 +2027,7 @@
   };
 
   return {
-    version: '2.0.0', SCHEMA,
+    version: '3.0.0', SCHEMA,
     round2, roundTo, money, uid,
     dates, rotation, pay,
     replay, monthlyBills, monthlySpend, safetyTarget, stage, stageName: (n) => STAGE_NAMES[n],
@@ -1959,6 +2038,8 @@
     afford: (state, today, price, opts) => afford(state, today, price, opts),
     whereItWent, stretchSpending: (state, today) => stretchSpending(state, today),
     accounts: (state, today) => accountsList(state, today),
+    series: (state, today) => series(state, today),
+    ticker: (state, today) => ticker(state, today),
     streak, milestones, isComplete,
     newState, normalizeState, makeBackup, readBackup,
     act,

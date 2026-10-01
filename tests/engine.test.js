@@ -246,7 +246,7 @@ test('P2: stage 1 → 2 inside one paycheck, quick wins, clears Store card', () 
   assert.equal(p.goals.stageAfter, 2);
   assert.deepEqual(p.items.map((i) => [i.key, i.amount]), [
     ['bills', 35], ['spend', 590], ['debt:store', 500], ['debt:visa', 573], ['save', 302]]);
-  assert.equal(item(p, 'debt:store').label, 'Pay $500 on Store card — that clears it! 🎉');
+  assert.equal(item(p, 'debt:store').label, 'Pay $500 on Store card — that clears it!');
   assert.equal(item(p, 'debt:store').clears, true);
   assert.equal(item(p, 'debt:store').debtId, 'store');
   assert.match(item(p, 'debt:store').why, /80% of what's left after bills and spending goes to one debt at a time, smallest first, for quick wins\. This pays off the whole balance, including this month's regular payment\./);
@@ -692,7 +692,7 @@ test('milestones: every key, and newMilestones skips celebrated ones', () => {
   assert.deepEqual(keys(), ['first', 'cushion', 'paid:store', 'halfway']);
   const paid = E.milestones(s, '2026-11-01').find((m) => m.key === 'paid:store');
   assert.equal(paid.title, 'Store card: PAID OFF!');
-  assert.equal(paid.emoji, '🏝️');
+  assert.equal(paid.emoji, '★');
   E.act.setDebtBalance(s, 'visa', 0, now('2026-10-05'));
   assert.deepEqual(keys(), ['first', 'cushion', 'paid:store', 'paid:visa', 'halfway', 'debtfree']);
   E.act.setSavings(s, 10000, now('2026-10-06'));
@@ -700,7 +700,7 @@ test('milestones: every key, and newMilestones skips celebrated ones', () => {
   const ms = E.milestones(s, '2026-11-01');
   ms.forEach((m) => { assert.ok(m.emoji && m.title && m.message); });
   assert.equal(ms.find((m) => m.key === 'debtfree').title, 'DEBT-FREE!');
-  assert.equal(ms.find((m) => m.key === 'harbor').emoji, '⚓');
+  assert.equal(ms.find((m) => m.key === 'harbor').emoji, '★');
 
   E.act.markCelebrated(s, ['first', 'cushion'], '2026-11-01');
   assert.deepEqual(E.summary(s, '2026-11-01').newMilestones.map((m) => m.key),
@@ -922,7 +922,7 @@ test('custom money formatter is used in every label', () => {
   const plan = E.makePlan(s2, { date: '2026-10-15', amount: 2000, nextDate: '2026-10-29', excludeId: p2.id }, { money: fmt });
   assert.equal(item(plan, 'bills').label, 'Leave R35 in checking for bills');
   assert.equal(item(plan, 'spend').label, 'Move R590 to your spending card');
-  assert.equal(item(plan, 'debt:store').label, 'Pay R500 on Store card — that clears it! 🎉');
+  assert.equal(item(plan, 'debt:store').label, 'Pay R500 on Store card — that clears it!');
   assert.equal(item(plan, 'save').label, 'Move R302 to savings');
   assert.match(plan.headline, /R1350/);
   plan.items.forEach((i) => assert.doesNotMatch(i.label + (i.sub || '') + i.why, /\$/));
@@ -1141,7 +1141,7 @@ test('fix: "that clears it" pays the whole balance, including the regular paymen
   assert.equal(debts.length, 1);
   assert.equal(debts[0].amount, 500);
   assert.equal(debts[0].clears, true);
-  assert.equal(debts[0].label, 'Pay $500 on Store card — that clears it! 🎉');
+  assert.equal(debts[0].label, 'Pay $500 on Store card — that clears it!');
   assert.match(debts[0].why, /This pays off the whole balance, including this month's regular payment\.$/);
   assert.equal(p.bills.find((b) => b.refId === 'store' && b.kind === 'min'), undefined);
   assert.equal(p.billsNeed, E.round2(p.bills.reduce((a, b) => a + b.amount, 0) + p.yearlyAside.reduce((a, y) => a + y.amount, 0)));
@@ -1376,8 +1376,8 @@ function pot(s, d) { return E.replay(s, d).pot; }
 
 test('§10.1 CATEGORIES and built-in accounts', () => {
   assert.deepEqual(E.CATEGORIES.map((c) => c.key), ['eat', 'delivery', 'groceries', 'gas', 'fun', 'shopping', 'travel', 'other']);
-  assert.deepEqual(E.CATEGORIES[0], { key: 'eat', emoji: '🍔', label: 'Eating out' });
-  assert.deepEqual(E.CATEGORIES.map((c) => c.emoji), ['🍔', '🛵', '🛒', '⛽', '🎉', '🛍️', '✈️', '📦']);
+  assert.deepEqual(E.CATEGORIES[0], { key: 'eat', emoji: '★', label: 'Eating out' });
+  assert.ok(E.CATEGORIES.every((c) => c.emoji === '★'));   // §11.2: no emoji in the UI
   const s = E.newState('2026-09-30');
   assert.deepEqual(s.accounts, [
     { id: 'checking', name: 'Checking', kind: 'checking' },
@@ -1653,7 +1653,7 @@ test('§10.3 recent purchases and places for autocomplete', () => {
   const sp = E.spending(s, '2026-10-04');
   assert.deepEqual(sp.recent.map((p) => p.where), ['uber eats', 'Shell', 'Uber Eats', 'Bakery']);
   const shell = sp.recent[1];
-  assert.equal(shell.emoji, '⛽');
+  assert.equal(shell.emoji, '★');
   assert.equal(shell.label, 'Gas');
   assert.equal(shell.paidWithName, 'Visa');
   assert.equal(sp.recent[0].paidWithName, 'Checking');
@@ -1726,8 +1726,8 @@ test('§10.5 whereItWent: totals, case-insensitive places (latest spelling), cat
   assert.equal(w.count, 4);
   assert.deepEqual(w.byPlace, [{ where: 'UBER EATS', total: 93, count: 3 }, { where: 'Shell', total: 52, count: 1 }]);
   assert.deepEqual(w.byCategory, [
-    { category: 'delivery', label: 'Delivery', emoji: '🛵', total: 93, count: 3 },
-    { category: 'gas', label: 'Gas', emoji: '⛽', total: 52, count: 1 }]);
+    { category: 'delivery', label: 'Delivery', emoji: '★', total: 93, count: 3 },
+    { category: 'gas', label: 'Gas', emoji: '★', total: 52, count: 1 }]);
   assert.equal(s.purchases[1].where, 'uber eats', 'where is trimmed');
   assert.deepEqual(E.whereItWent(s, '2026-11-01', '2026-11-30'), { total: 0, count: 0, byPlace: [], byCategory: [] });
 });
@@ -1781,7 +1781,7 @@ test('§10.6 recap covers home and boat stretches, with spent and a same-kind co
   let r = E.summary(s, '2026-10-20').recap;
   assert.equal(r.key, '2026-10-06');
   assert.equal(r.where, 'home');
-  assert.equal(r.title, 'Back out to sea ⚓');
+  assert.equal(r.title, 'Back out to sea');
   assert.equal(r.end, '2026-10-19');
   assert.equal(r.spent.total, 200);
   assert.deepEqual(r.spent.byPlace, [{ where: 'Uber Eats', total: 200, count: 1 }]);
@@ -1798,7 +1798,7 @@ test('§10.6 recap covers home and boat stretches, with spent and a same-kind co
   // Home stretch Nov 17–30 vs Oct 6–19.
   r = E.summary(s, '2026-12-01').recap;
   assert.equal(r.key, '2026-11-17');
-  assert.equal(r.compare.text, '$50 less than last time 🎉');
+  assert.equal(r.compare.text, '$50 less than last time');
   assert.equal(r.compare.diff, -50);
   // Nothing at all happened at home → empty (marked shown silently).
   const e = E.newState('2026-09-01');
@@ -2064,4 +2064,119 @@ test('fuzz: random histories of paydays, ticks, purchases, check-ins and undos s
       assert.deepEqual(sum2.recap, sum.recap);
     }
   }
+});
+
+
+// ---------------------------------------------------------------- §11.5 terminal additions
+
+const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B50}]/u;
+
+test('§11.5 series: weekly past through today, projected future to the debt-free date, capped', () => {
+  const { s, p2 } = afterP2();
+  tickAll(s, p2, '2026-10-15');
+  const sr = E.series(s, '2026-11-20');
+  assert.equal(sr.past[0].date, '2026-09-30');
+  assert.equal(sr.past[sr.past.length - 1].date, '2026-11-20');
+  for (let i = 1; i < sr.past.length - 1; i++) assert.equal(dates.diffDays(sr.past[i - 1].date, sr.past[i].date), 7);
+  assert.equal(sr.past[0].debt, 1700);
+  assert.equal(sr.past[0].savings, 200);
+  const sum = E.summary(s, '2026-11-20');
+  assert.deepEqual(sum.series, sr);
+  assert.equal(sr.debtFree, sum.projection.debtFree);
+  assert.ok(sr.future.length > 0 && sr.future.length <= 80);
+  assert.ok(sr.future.every((x) => x.date > '2026-11-20' && x.date <= dates.addDays('2026-11-20', 1096)));
+  assert.ok(sr.future.some((x) => x.debt === 0), 'the projection reaches zero debt');
+  for (let i = 1; i < sr.future.length; i++) assert.ok(sr.future[i].debt <= sr.future[i - 1].debt + 0.01);
+  // A debt added later isn't counted before it existed.
+  const t = base();
+  t.debts.push({ id: 'car', name: 'Car loan', balance: 3000, asOf: '2026-10-20', minPayment: 100, dueDay: 3, rate: 6 });
+  const st = E.series(t, '2026-11-01');
+  assert.equal(st.past[0].debt, 1700);
+  assert.ok(st.past[st.past.length - 1].debt > 4000);
+});
+
+test('§11.5 series: long history samples coarser, short or no-pay histories still work', () => {
+  const s = base();
+  s.createdAt = '2024-01-01';
+  const sr = E.series(s, '2026-10-01');
+  assert.ok(sr.past.length <= 102);
+  assert.equal(sr.past[sr.past.length - 1].date, '2026-10-01');
+  const n = base();
+  n.settings.payAmount = null;
+  const sn = E.series(n, '2026-09-30');
+  assert.equal(sn.past.length, 1);
+  assert.deepEqual(sn.future, []);
+  assert.equal(sn.debtFree, null);
+});
+
+test('§11.5 ticker: spending, each open debt, savings — changes since the latest payday', () => {
+  const { s, p2 } = afterP2();
+  tickAll(s, p2, '2026-10-15');
+  E.act.addPurchase(s, { date: '2026-10-16', amount: 52, where: 'Shell', category: 'gas', paidWith: 'spending' }, now('2026-10-16'));
+  E.act.addPurchase(s, { date: '2026-10-16', amount: 18, where: 'Cafe', category: 'eat', paidWith: 'spending' }, now('2026-10-16'));
+  const tk = E.ticker(s, '2026-10-16');
+  assert.deepEqual(tk.map((x) => x.key), ['spend', 'debt:visa', 'savings']);   // Store card is paid off
+  const spend = tk[0];
+  assert.equal(spend.change, -70);
+  assert.equal(spend.good, false);
+  assert.equal(E.summary(s, '2026-10-16').spending.spentToday, 70);
+  const visa = tk[1];
+  assert.equal(visa.label, 'VISA');
+  assert.equal(visa.value, 611);
+  assert.equal(visa.change, -573);               // the extra payment ticked on payday (Oct 15)
+  assert.equal(visa.good, true);
+  assert.equal(tk[2].change, 302);
+  assert.equal(tk[2].good, true);
+  assert.deepEqual(E.summary(s, '2026-10-16').ticker, tk);
+  // Not logging: no SPEND item; no payday: changes over the last 14 days.
+  const b = base();
+  const tb = E.ticker(b, '2026-10-05');
+  assert.deepEqual(tb.map((x) => x.key), ['debt:store', 'debt:visa', 'savings']);
+  assert.ok(tb.every((x) => x.change === 0 && x.good));
+  assert.equal(E.summary(b, '2026-10-05').spending.spentToday, 0);
+});
+
+test('§11.5 stageInfo fractions', () => {
+  const { s, p2 } = afterP2();
+  let si = E.summary(s, '2026-10-15').stageInfo;
+  assert.equal(si.stage, 1);
+  assert.equal(si.cushionFrac, 0.96);
+  assert.ok(Math.abs(si.debtFrac - (1 - 1684 / 1700)) < 1e-9);   // Visa 1184 after its Oct 10 minimum + Store 500
+  tickAll(s, p2, '2026-10-15');
+  si = E.summary(s, '2026-10-15').stageInfo;
+  assert.equal(si.stage, 2);
+  assert.equal(si.cushionFrac, 1);
+  assert.ok(si.debtFrac > 0.6 && si.debtFrac < 0.7);
+  assert.ok(si.safetyFrac > 0 && si.safetyFrac < 1);
+  const n = E.newState('2026-09-30');
+  assert.deepEqual(E.summary(n, '2026-09-30').stageInfo, { stage: 1, cushionFrac: 0, debtFrac: 1, safetyFrac: 0 });
+});
+
+test('§11.2 no emoji in any user-facing engine text', () => {
+  const texts = [];
+  const add = (v) => { if (typeof v === 'string') texts.push(v); };
+  const { s, p1, p2 } = afterP2();
+  [p1, p2].forEach((pd) => {
+    add(pd.plan.headline); add(pd.plan.note);
+    pd.plan.items.forEach((it) => { add(it.label); add(it.sub); add(it.why); });
+  });
+  tickAll(s, p2, '2026-10-15');
+  E.act.addPurchase(s, { date: '2026-10-16', amount: 52, where: 'Shell', category: 'gas', paidWith: 'spending' }, now('2026-10-16'));
+  ['2026-10-16', '2026-10-20', '2026-11-17', '2026-12-01'].forEach((d) => {
+    const sum = E.summary(s, d);
+    sum.newMilestones.forEach((m) => { add(m.title); add(m.message); });
+    E.milestones(s, d).forEach((m) => { add(m.title); add(m.message); assert.equal(m.emoji, '★'); });
+    if (sum.recap && !sum.recap.empty) { add(sum.recap.title); if (sum.recap.compare) add(sum.recap.compare.text); }
+    add(sum.spending.sub); add(sum.spending.overText);
+    [10, 600, 5000].forEach((price) => { const a = E.afford(s, d, price); add(a.headline); add(a.sub); });
+    sum.voyage.stops.forEach((x) => { add(x.label); add(x.sub); });
+    sum.ticker.forEach((x) => add(x.label));
+  });
+  for (const amt of [80, 45, 20]) {
+    const t = afterP1().s;
+    const pd = E.act.addPayday(t, { date: '2026-10-15', amount: amt, nextDate: '2026-10-29' }, now('2026-10-15'));
+    add(pd.plan.headline); add(pd.plan.note); pd.plan.items.forEach((it) => { add(it.label); add(it.sub); add(it.why); });
+  }
+  assert.ok(texts.length > 40);
+  texts.forEach((t) => assert.ok(!EMOJI.test(t), 'emoji in: ' + t));
 });
