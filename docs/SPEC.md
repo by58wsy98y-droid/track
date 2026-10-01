@@ -522,3 +522,126 @@ Items: bills 60, spend 590, debt Store card 475 (clears), debt Visa 573, save 30
 
 P3 — same as P2 but amount $80: billsKeep 60, spend 20 (desired 590), goals 0 → status 'tight'.
 P4 — same as P2 but amount $45: status 'short', shortBy 15, billsKeep 45, spend 0, goals 0.
+
+## 10. Money: accounts, spending pot, purchase log (v2)
+
+The user changed their mind about logging: they now want accounts with balances they type in, and a purchase log
+where every purchase immediately lowers "what's left to spend". Their picks: **one pot until payday**, a **"Can I afford
+it?" check**, and a **"Where it went" recap** each stretch (compared with the last stretch of the same kind). They did NOT
+pick one-tap favourites or work-time cost — don't build those. Logging stays **optional**: if they never log, the
+payday checklist works exactly as before and nothing looks broken. Same principles as §0 (babyfied, plain English,
+never guilt, big targets, offline, no personal numbers in code).
+
+### 10.1 State — schema 2
+`normalizeState` migrates schema 1 → 2 losslessly (existing users have real data on their device; a schema-1 backup
+must restore). `readBackup` accepts 1 and 2; `makeBackup` writes 2. New fields:
+```js
+accounts: [ { id, name, kind: 'checking'|'spending'|'savings'|'cash'|'other' } ],
+  // Built-ins always exist (migration/newState add them): {id:'checking', name:'Checking', kind:'checking'},
+  // {id:'spending', name:'Spending card', kind:'spending'}, {id:'savings', name:'Savings', kind:'savings'}.
+  // Built-ins can be renamed, never deleted. User-added accounts are kind 'cash' or 'other' (a second savings account is 'other').
+purchases: [ { id, date, t, amount, where, what, category, paidWith } ],
+  // amount > 0; where ≤ 60 chars (trimmed); what ≤ 80 chars (optional); category = a key below;
+  // paidWith = an account id ('spending' default, 'checking', a cash/other id) or 'debt:<debtId>' (a credit card etc.)
+checkins[i].accounts: { [accountId]: number }   // optional; 'spending' sets the pot; savings keeps using checkins[i].savings
+paydays[i].t                                     // creation time (ms) — optional, used only for same-day ordering
+```
+`Engine.CATEGORIES` (fixed, in this order): `eat` 🍔 Eating out · `delivery` 🛵 Delivery · `groceries` 🛒 Groceries ·
+`gas` ⛽ Gas · `fun` 🎉 Going out · `shopping` 🛍️ Shopping · `travel` ✈️ Travel · `other` 📦 Other.
+
+### 10.2 Replay additions (same event loop)
+Event order per date: 0 = due dates (debt interest + minimum, **and bills**), 1 = payday deposit/pot refill (before
+any tick that day), then ticks (by t), 2 = purchases and check-ins interleaved by t. (Keep the existing rule that a
+check-in comes after same-day **ticks**; purchases follow real time order relative to check-ins.)
+`replay()` additionally returns `accounts: { [id]: { balance: number|null, asOf: iso|null, changed: bool } }`,
+`pot: number|null`, `potStart: iso|null`.
+- **Money accounts** (checking, cash, other): `null` until a check-in sets one. After that, events adjust it:
+  payday → checking += amount; bill due dates (monthly occurrences and yearly full amount) → checking −= amount;
+  debt minimum applied → checking −= that amount; ticked `spend`/`save`/`debt` items → checking −= amount
+  (`bills` item: no change); purchase paid with that account → −= amount. `changed` = something adjusted it since the
+  last entered balance (UI says "estimated").
+- **Savings account** = the existing replay savings (unchanged logic).
+- **Spending pot** ("left to spend"; it IS the spending card): starts only once logging starts —
+  `potStart` = the date of the latest payday on or before the earliest purchase or `accounts.spending` check-in
+  (or that purchase/check-in date when no payday precedes it). Pot = 0 at potStart, then: each payday on/after potStart
+  → `+= plan.spend.amount`; **every** purchase (whatever paid with it) → `−= amount`; check-in `accounts.spending` →
+  set. Leftovers and overspending roll over. Never logged and never set → `pot: null`.
+- **Purchase paid with `debt:<id>`** → also that debt's balance `+= amount` (skip if purchase date < debt.asOf),
+  re-opens a paid-off debt (`paidOffOn = null`), log type `'charge'`. Payday plans then pay it back automatically.
+- Undo/edit payday and edit/delete purchase all flow through replay — nothing is stored pre-computed.
+
+### 10.3 `Engine.spending(state, today, opts)` (Today + Money screens)
+```js
+{ started, left,                 // pot today (null when not started)
+  from, until,                   // latest payday date and its nextDate (null if none)
+  daysLeft, homeDays, boatDays, otherDays,   // days from today through until−1, split by rotation
+  perDay, perHome, perBoat,      // scale = left / (H·homeDaily + B·boatDaily + O·otherDaily); perHome = scale·homeDaily …
+  sub,                           // "about $71 a day until Oct 15" | "about $100 a day at home · $10 on the boat until Oct 15"
+                                 // | daysLeft 0: "Payday's due — this is what's left until it lands."
+  status: 'ok'|'low'|'over',     // over: left < 0; low: left < 50% of the normal need for the days left
+  overText,                      // when over: "You're $40 over. No stress — it comes out of your next spending money."
+  carried,                       // pot just before the latest payday's refill (≠ 0 → "includes $120 left over from last time")
+  recent,                        // purchases newest first (max 30) with { …purchase, label, emoji, paidWithName }
+  places }                       // [{ where, category, paidWith, count }] most-used first (case-insensitive), for autocomplete
+```
+Spending rates are the same ones `makePlan` uses (`spendingRates`).
+
+### 10.4 `Engine.afford(state, today, price, opts)` → `{ verdict: 'ok'|'tight'|'wait', headline, sub, before, after }`
+`need` = normal spending for the days left (rates × days). `afterLeft = left − price`.
+- `afterLeft < 0` → wait: "That's more than you've got left ($X). Maybe wait until payday on Oct 15."
+- `need ≤ 0` or `afterLeft ≥ 0.85·need` → ok: "Go for it — you'd still have about $67 a day."
+- `afterLeft ≥ 0.5·need` → tight: "You can, but the rest of the days get tighter: about $40 a day."
+- else → wait: "That would leave about $12 a day until Oct 15. Maybe wait, or find a cheaper option."
+`before`/`after` = `{ left, perDay, perHome, perBoat }`. When not started, use the latest plan's spend amount minus
+nothing as `left` and add "Log your purchases for a sharper answer." to `sub`. Never preachy.
+
+### 10.5 Where it went
+`Engine.whereItWent(state, fromIso, toIso)` → `{ total, count, byPlace: [{ where, total, count }], byCategory: [{ category, label, emoji, total, count }] }`
+sorted by total desc; places grouped case-insensitively (display the most recent spelling).
+`Engine.stretchSpending(state, today)` → `{ current: { where, start, end: today, summary }, previous: { where, start, end, summary } | null }`:
+current rotation stretch so far vs the **previous stretch of the same kind** (home vs home, boat vs boat).
+No boat date → current pay period vs the previous pay period.
+
+### 10.6 Recap now covers both kinds of stretch
+`summary.recap` fires for the stretch that just ended, boat **or** home (key = that stretch's start; same shown/empty
+rules; must end ≥ createdAt): boat ended → "Welcome home!"; home ended → "Back out to sea ⚓". Adds
+`spent` (= whereItWent for that stretch) and `compare` (`{ previousTotal, diff }` vs the previous same-kind stretch, or
+null). Empty when no paydays, no debt paid and no purchases. Comparison wording is neutral/encouraging:
+"$170 less than last time 🎉" / "$90 more than last time".
+
+### 10.7 `Engine.accounts(state, today)` → `[{ id, name, kind, balance|null, asOf|null, estimated, builtIn }]`
+Order: checking, spending (balance = pot), savings, then user accounts. Debts stay in `summary.debts`.
+
+### 10.8 Actions
+`act.addPurchase(state, {date, amount, where, what, category, paidWith}, now)` → purchase (throws friendly Error on
+bad input: amount ≤ 0, date invalid or after today, unknown paidWith → default 'spending', unknown category → 'other');
+`act.editPurchase(state, id, fields, now)`, `act.deletePurchase(state, id)`;
+`act.addAccount(state, {name, kind})`, `act.renameAccount(state, id, name)`, `act.deleteAccount(state, id)` (not built-ins;
+purchases that used it keep their record but stop affecting balances);
+`act.setAccountBalance(state, id, amount, now)` ('savings' → setSavings, 'spending' → sets the pot, else a check-in);
+`act.addCheckin` also accepts `accounts`.
+
+### 10.9 Screens
+- **Tabs:** Today · Money · Voyage · Settings (Money icon: wallet).
+- **Today** gets exactly ONE new compact card between Next-up and Progress: "Left to spend" big amount + `sub` +
+  two buttons **＋ Log a purchase** and **Can I afford it?**; over → `overText` in a soft (not red) style. Not started →
+  a slim invite: "💳 Want to see what's left to spend? Log what you buy." [Log a purchase]. Today now answers: where am I,
+  what's next, what's left to spend, how close are my goals — nothing else.
+- **Log a purchase** sheet — fast (≈10 seconds): How much (big money input, autofocus) · Where (text + native
+  `<datalist>` of `places`; choosing a known place pre-selects its last category and paid-with) · What (optional) ·
+  category chips · Paid with chips (Spending card default · Checking · user accounts · each open debt as
+  "💳 Visa — adds to what you owe") · date (default today, compact). Save → toast "Logged ✓ $598 left · about $66 a day"
+  (+ "Added to your Visa balance." for debts). Editing a purchase uses the same sheet with Delete.
+- **Can I afford it?** sheet: price input → live result card (✅ ok / 🤔 tight / ✋ wait, headline, before → after per day)
+  → "I bought it — log it" (opens Log a purchase prefilled) or "Close".
+- **Money** screen: (1) Left to spend card (same as Today, larger) + "includes $X left over from last time" when
+  `carried ≠ 0`; (2) Recent purchases grouped Today / Yesterday / date (emoji, where — what, amount; small paid-with
+  hint); tap → edit; (3) Where it went: "This home stretch so far: $1,240 · last home stretch: $1,410", top 5 places
+  (bar rows, "9×"), categories as simple bars — hidden when nothing logged; (4) Accounts: checking, spending card,
+  savings, user accounts (balance or "Add balance", "as of Oct 1" / "estimated"), then "What you owe" (debts, same
+  balances as Voyage); tap → set-balance sheet; "+ Add an account" (name + Cash/Other).
+- **Recap modal** adds: "Spent: $1,240 — top: Uber Eats $310 (9×), Shell $180" and the comparison line.
+- **Setup:** one new optional step after Savings: "What's in checking and on your spending card right now?"
+  (two money fields, skippable) → `setAccountBalance`.
+- **Check-in sheet** also lists Checking, Spending card (what's left) and user accounts.
+- `sw.js` VERSION → `harbor-v2` (people already have v1 installed) and add any new files to APP_FILES.
