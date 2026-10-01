@@ -1,0 +1,188 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  :root{
+    --bg:#000; --panel:#0c0d0f; --panel2:#111317; --line:#1e2228; --text:#e9e7e3; --muted:#868c96;
+    --amber:#ffa028; --amber-dim:#5a3a10; --green:#2bd47d; --red:#ff5b53; --cyan:#5cc8f2; --gray:#4a505a;
+    --mono:"SF Mono", ui-monospace, Menlo, "DejaVu Sans Mono", monospace;
+    --sans:-apple-system, "SF Pro Text", "Liberation Sans", "DejaVu Sans", sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#16181c;font-family:var(--sans);color:var(--text);padding:36px 36px 40px}
+  .row{display:flex;gap:36px;align-items:flex-start}
+  .cap{font:600 15px var(--sans);color:#c9ccd2;margin:0 0 12px 4px;letter-spacing:.2px}
+  .cap b{color:var(--amber);font-family:var(--mono);font-weight:700;margin-right:6px}
+  .phone{width:390px;height:900px;background:var(--bg);border-radius:46px;overflow:hidden;position:relative;
+    box-shadow:0 0 0 10px #050505,0 0 0 11px #2a2d33,0 30px 60px rgba(0,0,0,.5)}
+  .scr{position:absolute;inset:0;padding:54px 14px 92px;display:flex;flex-direction:column;gap:9px}
+  .scr>*{flex:none}
+  .mono{font-family:var(--mono)}
+  .lbl{font:700 11px var(--mono);letter-spacing:1.4px;color:var(--amber);text-transform:uppercase}
+  .mut{color:var(--muted)}
+  .up{color:var(--green)} .dn{color:var(--red)}
+  .top{display:flex;justify-content:space-between;align-items:center;padding:0 2px}
+  .brand{font:800 17px var(--mono);letter-spacing:3px;color:var(--amber)}
+  .live{font:600 11px var(--mono);color:var(--muted);letter-spacing:1px}
+  .live i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px;box-shadow:0 0 8px var(--green)}
+  .tape{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:7px 2px;white-space:nowrap;overflow:hidden;
+    font:600 12px var(--mono);letter-spacing:.3px}
+  .tape span{margin-right:16px}
+  .tape b{color:var(--text);font-weight:700}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 12px}
+  .rot{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .rot .t{font:700 14px var(--mono);letter-spacing:.6px}
+  .chg{font:600 11px var(--mono);color:var(--cyan);border:1px solid #1d3a48;border-radius:4px;padding:4px 7px;letter-spacing:1px}
+  .bar{height:5px;background:#1b1e23;border-radius:2px;overflow:hidden;margin-top:9px;display:flex}
+  .bar i{display:block;height:100%}
+  .quote .big{font:700 44px var(--mono);letter-spacing:-1px;margin:6px 0 2px;line-height:1}
+  .quote .big small{font-size:26px;color:#9aa0a8}
+  .qrow{display:flex;justify-content:space-between;font:600 12.5px var(--mono);margin-top:6px}
+  .btns{display:flex;gap:8px;margin-top:12px}
+  .btn{flex:1;text-align:center;font:800 13px var(--mono);letter-spacing:1.2px;border-radius:5px;padding:13px 6px}
+  .btn.pri{background:var(--amber);color:#111}
+  .btn.out{border:1px solid var(--amber-dim);color:var(--amber)}
+  .hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .hdr .r{font:600 11px var(--mono);color:var(--muted);letter-spacing:1px}
+  .ord{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
+  .ord:first-of-type{border-top:0}
+  .box{width:22px;height:22px;border:1.5px solid var(--gray);border-radius:4px;flex:none;display:grid;place-items:center;font:800 13px var(--mono)}
+  .box.on{background:var(--green);border-color:var(--green);color:#03140b}
+  .ord .txt{flex:1;font:600 13.5px var(--sans);line-height:1.25}
+  .ord .txt em{display:block;font:500 11px var(--mono);color:var(--muted);font-style:normal;letter-spacing:.4px;margin-top:2px}
+  .ord .amt{font:700 14px var(--mono);text-align:right}
+  .ord .st{font:700 9.5px var(--mono);letter-spacing:1px;padding:2px 5px;border-radius:3px;margin-top:3px;display:inline-block}
+  .st.f{color:var(--green);background:#0b2a1a} .st.o{color:var(--amber);background:#2a1c08}
+  .why{font:700 10px var(--mono);color:var(--cyan);letter-spacing:1px;margin-left:2px}
+  .kv{display:flex;justify-content:space-between;font:600 12.5px var(--mono);padding:3px 0}
+  .stage{display:flex;gap:4px;margin:8px 0 4px}
+  .stage div{flex:1;height:6px;border-radius:2px;background:#1b1e23}
+  .stage .d{background:var(--green)} .stage .c{background:linear-gradient(90deg,var(--amber) 64%,#1b1e23 64%)}
+  .stg{display:flex;justify-content:space-between;font:600 9.5px var(--mono);color:var(--muted);letter-spacing:.8px}
+  .tabs{position:absolute;left:0;right:0;bottom:0;height:84px;border-top:1px solid var(--line);background:#050607;
+    display:flex;justify-content:space-around;padding-top:12px}
+  .tab{font:700 11px var(--mono);letter-spacing:1.3px;color:var(--muted);text-align:center}
+  .tab small{display:block;font-size:9px;color:#4b515b;margin-bottom:3px}
+  .tab.on{color:var(--amber)} .tab.on:after{content:"";display:block;height:2px;background:var(--amber);margin-top:6px}
+  .alloc{display:flex;height:22px;border-radius:3px;overflow:hidden;margin:8px 0 6px;gap:2px}
+  .alloc div{display:flex;align-items:center;justify-content:center;font:800 10px var(--mono);color:#0b0b0b}
+  .leg{display:flex;gap:12px;font:600 11px var(--mono);color:var(--muted)}
+  .leg i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+  .status{font:700 12px var(--mono);color:var(--green);letter-spacing:.6px;line-height:1.5}
+  .trow{display:grid;grid-template-columns:52px 1fr 64px 76px;gap:6px;font:600 12px var(--mono);padding:8px 0;border-top:1px solid var(--line);align-items:center}
+  .trow.h{color:var(--muted);font-size:10px;letter-spacing:1.2px;border-top:0;padding-top:0}
+  .trow .r{text-align:right}
+  .tag{font:700 9.5px var(--mono);color:var(--muted);letter-spacing:.8px}
+  .hb{display:grid;grid-template-columns:86px 1fr 58px;gap:8px;align-items:center;font:600 12px var(--mono);padding:4px 0}
+  .hb .b{height:8px;background:#1b1e23;border-radius:2px;overflow:hidden}
+  .hb .b i{display:block;height:100%;background:var(--amber)}
+  .pos{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--line);font:600 13px var(--mono)}
+  .pos:first-of-type{border-top:0}
+  .pos small{display:block;font:500 10px var(--mono);color:var(--muted);letter-spacing:.6px;margin-top:2px}
+  svg text{font-family:var(--mono)}
+</style></head>
+<body>
+<div class="row">
+
+<!-- ============ TODAY ============ -->
+<div>
+<p class="cap"><b>1</b>Today — your dashboard</p>
+<div class="phone"><div class="scr">
+  <div class="top"><span class="brand">HARBOR</span><span class="live"><i></i>LIVE · OCT 07</span></div>
+  <div class="tape">
+    <span>SPEND <b>740.00</b> <span class="dn">▼38.00</span></span>
+    <span>VISA <b>1,152.00</b> <span class="up">▼48.00</span></span>
+    <span>SAVINGS <b>1,262.00</b> <span class="up">▲302.00</span></span>
+  </div>
+  <div class="panel">
+    <div class="rot"><div><div class="lbl">Rotation</div><div class="t" style="margin-top:4px">HOME · DAY 2/14 · <span style="color:var(--amber)">OUT OCT 20</span></div></div><span class="chg">EDIT</span></div>
+    <div class="bar"><i style="width:14%;background:var(--amber)"></i></div>
+  </div>
+  <div class="panel quote">
+    <div class="lbl">Left to spend</div>
+    <div class="big">$740<small>.00</small></div>
+    <div class="qrow"><span class="dn">▼ $38.00 TODAY</span><span>$93 / DAY · 8 DAYS</span></div>
+    <div class="btns"><div class="btn pri">+ LOG PURCHASE</div><div class="btn out">CAN I AFFORD IT?</div></div>
+  </div>
+  <div class="panel">
+    <div class="hdr"><span class="lbl">Payday to-do · Oct 01</span><span class="r">2/3 DONE</span></div>
+    <div class="ord"><div class="box on">✓</div><div class="txt">Leave $290 in checking for bills</div><div class="amt">290.00<br><span class="st f">DONE</span></div></div>
+    <div class="ord"><div class="box on">✓</div><div class="txt">Move $950 to your spending card</div><div class="amt">950.00<br><span class="st f">DONE</span></div></div>
+    <div class="ord"><div class="box"></div><div class="txt">Move $760 to savings<em>WHY? ›</em></div><div class="amt">760.00<br><span class="st o">TO DO</span></div></div>
+  </div>
+  <div class="panel">
+    <div class="hdr"><span class="lbl">Progress · Stage 2/3</span><span class="r">CRUSH THE DEBT</span></div>
+    <div class="stage"><div class="d"></div><div class="c"></div><div></div></div>
+    <div class="stg"><span>CUSHION ✓</span><span>DEBT 64%</span><span>SAFETY NET</span></div>
+    <svg width="100%" height="50" viewBox="0 0 340 64" preserveAspectRatio="none" style="margin-top:6px">
+      <polyline points="0,8 40,10 80,14 120,22 160,30 200,36 240,44 280,50 340,56" fill="none" stroke="#ff5b53" stroke-width="2"/>
+      <polyline points="0,58 40,57 80,52 120,48 160,40 200,35 240,30 280,24 340,18" fill="none" stroke="#2bd47d" stroke-width="2"/>
+      
+    </svg>
+    <div class="kv"><span class="mut"><span class="dn">━</span> DEBT  <span class="up">━</span> SAVINGS</span></div>
+    <div class="kv"><span class="mut">DEBT-FREE TARGET</span><span style="color:var(--amber)">NOV 2026</span></div>
+  </div>
+</div>
+<div class="tabs"><div class="tab on"><small>F1</small>TODAY</div><div class="tab"><small>F2</small>MONEY</div><div class="tab"><small>F3</small>PROGRESS</div><div class="tab"><small>F4</small>SETTINGS</div></div>
+</div>
+</div>
+
+<!-- ============ PAYDAY ============ -->
+<div>
+<p class="cap"><b>2</b>Payday — your plan, like an order ticket</p>
+<div class="phone"><div class="scr">
+  <div class="top"><span class="brand">PAYDAY</span><span class="live">OCT 15 → NEXT ~OCT 29</span></div>
+  <div class="panel quote">
+    <div class="lbl">Hit your bank</div>
+    <div class="big">$2,000<small>.00</small></div>
+    <div class="alloc"><div style="flex:35;background:#6b7380;min-width:28px">35</div><div style="flex:590;background:var(--amber)">590</div><div style="flex:1375;background:var(--green)">1,375</div></div>
+    <div class="leg"><span><i style="background:#6b7380"></i>BILLS</span><span><i style="background:var(--amber)"></i>SPENDING</span><span><i style="background:var(--green)"></i>GOALS</span></div>
+  </div>
+  <div class="panel"><div class="status">✓ BILLS COVERED · SPENDING SET<br>✓ $1,375 GOES TO YOUR GOALS</div></div>
+  <div class="panel">
+    <div class="hdr"><span class="lbl">Your to-do list</span><span class="r">0/5 DONE</span></div>
+    <div class="ord"><div class="box"></div><div class="txt">Leave $35 in checking for bills<em>1 BILL BEFORE OCT 29 · WHY? ›</em></div><div class="amt">35.00</div></div>
+    <div class="ord"><div class="box"></div><div class="txt">Move $590 to your spending card<em>$100/DAY HOME · $10/DAY BOAT</em></div><div class="amt">590.00</div></div>
+    <div class="ord"><div class="box"></div><div class="txt">Pay off Store card<em>CLEARS IT · WHY? ›</em></div><div class="amt up">500.00</div></div>
+    <div class="ord"><div class="box"></div><div class="txt">Pay $573 extra on Visa<em>SMALLEST DEBT NEXT · WHY? ›</em></div><div class="amt">573.00</div></div>
+    <div class="ord"><div class="box"></div><div class="txt">Move $302 to savings<em>CUSHION GROWS · WHY? ›</em></div><div class="amt">302.00</div></div>
+  </div>
+  <div class="btn pri" style="flex:none;padding:15px">DONE FOR NOW</div>
+</div></div>
+</div>
+
+<!-- ============ MONEY ============ -->
+<div>
+<p class="cap"><b>3</b>Money — purchases, where it went, accounts</p>
+<div class="phone"><div class="scr">
+  <div class="top"><span class="brand">MONEY</span><span class="live">HOME STRETCH · DAY 2</span></div>
+  <div class="panel">
+    <div class="hdr"><span class="lbl">Purchases</span><span class="r">THIS STRETCH −210.00</span></div>
+    <div class="trow h"><span>DATE</span><span>WHERE</span><span>KIND</span><span class="r">AMOUNT</span></div>
+    <div class="trow"><span class="mut">OCT 07</span><span>TARGET<br><span class="tag">ON VISA</span></span><span class="tag">SHOP</span><span class="r dn">−120.00</span></div>
+    <div class="trow"><span class="mut">OCT 07</span><span>SHELL</span><span class="tag">GAS</span><span class="r dn">−52.00</span></div>
+    <div class="trow"><span class="mut">OCT 02</span><span>UBER EATS</span><span class="tag">DELIVERY</span><span class="r dn">−38.00</span></div>
+  </div>
+  <div class="panel">
+    <div class="hdr"><span class="lbl">Where it went</span><span class="r up">▼ $200 LESS THAN LAST TIME</span></div>
+    <div class="hb"><span>TARGET</span><div class="b"><i style="width:100%"></i></div><span class="r" style="text-align:right">120</span></div>
+    <div class="hb"><span>SHELL</span><div class="b"><i style="width:43%"></i></div><span style="text-align:right">52</span></div>
+    <div class="hb"><span>UBER EATS</span><div class="b"><i style="width:32%"></i></div><span style="text-align:right">38</span></div>
+  </div>
+  <div class="panel">
+    <div class="hdr"><span class="lbl">Accounts</span><span class="r">TAP TO UPDATE</span></div>
+    <div class="pos"><span>CHECKING<small>ESTIMATED · SET SEP 30</small></span><span>1,620.00</span></div>
+    <div class="pos"><span>SPENDING CARD<small>FROM WHAT YOU'VE LOGGED</small></span><span>740.00</span></div>
+    <div class="pos"><span>SAVINGS<small>STARTER CUSHION ✓</small></span><span class="up">1,262.00</span></div>
+  </div>
+  <div class="panel">
+    <div class="hdr"><span class="lbl">What you owe</span><span class="r">TOTAL 1,152.00</span></div>
+    <div class="pos"><span>VISA<small>NEXT ON THE LIST</small></span><span>1,152.00</span></div>
+    <div class="pos"><span>STORE CARD<small class="up">PAID OFF ✓</small></span><span class="mut">0.00</span></div>
+  </div>
+</div>
+<div class="tabs"><div class="tab"><small>F1</small>TODAY</div><div class="tab on"><small>F2</small>MONEY</div><div class="tab"><small>F3</small>PROGRESS</div><div class="tab"><small>F4</small>SETTINGS</div></div>
+</div>
+</div>
+
+</div>
+</body></html>

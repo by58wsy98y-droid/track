@@ -649,3 +649,99 @@ purchases that used it keep their record but stop affecting balances);
   (two money fields, skippable) → `setAccountBalance`.
 - **Check-in sheet** also lists Checking, Spending card (what's left) and user accounts.
 - `sw.js` VERSION → `harbor-v2` (people already have v1 installed) and add any new files to APP_FILES.
+
+## 11. HARBOR TERMINAL — the trading-terminal redesign (v3)
+
+The user loves the function but finds the nautical cartoon look childish. They want a **Wall Street / Bloomberg
+terminal** look while keeping **exactly the same functions, flows, math and simplicity**. They approved the mockup in
+`docs/design/terminal-mockup.png` (source: `docs/design/terminal-mockup.html` — reuse its CSS ideas) and chose:
+name **HARBOR TERMINAL**, **terminal flash** celebrations instead of confetti, **dark only**.
+
+Nothing about behaviour, data, storage key (`harbor.v1`), schema (2), offline support or plain-English sentences
+changes. Only the look, a few labels, and small engine additions below. "Look like Wall Street, talk like a friend":
+terse uppercase labels are fine, finance jargon is not (no P&L, liquidity, bps, positions, liabilities).
+
+### 11.1 Identity
+- In-app wordmark: **HARBOR TERMINAL** (amber, mono, letter-spaced). `<title>` and manifest `name`: "Harbor Terminal".
+- Home Screen label (manifest `short_name`, `apple-mobile-web-app-title`): **"Harbor"** (iPad truncates longer names).
+- New icon set (same file names): black background, bold amber mark that reads at 60px — e.g. an amber "H" whose
+  right stem is a rising green line/candle. No boat. Opaque apple-touch-icon; maskable keeps the mark in the safe zone.
+- `sw.js` VERSION → `harbor-v3`.
+
+### 11.2 Theme (dark only — remove the light theme entirely)
+`color-scheme: dark`; `theme-color` #000000; status bar style `black-translucent` with safe-area padding.
+```
+--bg #000000   --panel #0C0D0F   --panel-2 #111317   --line #1E2228
+--text #E9E7E3 --muted #868C96   --gray #4A505A      --bills #6B7380
+--amber #FFA028 (labels, primary buttons, brand, "current")   --amber-dim #5A3A10 (secondary button borders)
+--green #2BD47D (good: debt down, saved, done)  --red #FF5B53 (money out, over)  --cyan #5CC8F2 (EDIT, WHY?, links)
+```
+- Typography: numbers, labels, tabs, tags, buttons → mono stack `"SF Mono", ui-monospace, Menlo, monospace` with
+  `font-variant-numeric: tabular-nums`. Small labels: 11–12px, uppercase, letter-spacing ≈1.3px, amber. Sentences
+  (checklist steps, why?, headlines, setup questions, recaps) stay in the system sans, sentence case, ≥ 16px.
+  Inputs ≥ 18px. Big quotes show cents smaller/dimmer: **$740**.00.
+- Shapes: panels radius 6px, 1px `--line` borders, no soft shadows; buttons radius 5px. Primary = amber fill + near-black
+  mono uppercase text; secondary = `--amber-dim` border + amber text; EDIT/WHY?/links = cyan mono.
+- **No emoji anywhere in the UI** (banner, tabs, buttons, cards, categories, milestones, recaps, toasts). Use glyphs:
+  ▲ ▼ ● ■ ✓ ›. Category codes in tables: EAT · DLVR · GROC · GAS · FUN · SHOP · TRVL · OTHR (full names in the picker).
+  Drop cutesy nautical wording ("Keep sailing" → "Keep going"); stage names stay (Starter cushion, Crush the debt,
+  Full safety net, Safe Harbor).
+- Green/red always mean good/bad *for the user* (a debt going down is green ▼). Never use red to scold: "over" and
+  "short" states use amber text with a kind sentence.
+
+### 11.3 Screens (layout follows the mockup)
+- **Tabs:** `F1 TODAY · F2 MONEY · F3 PROGRESS · F4 SETTINGS` (small muted "F1" above the label; active = amber + 2px underline).
+  PROGRESS replaces Voyage (same content, terminal visuals).
+- **Header** on each tab: screen title (TODAY shows the HARBOR TERMINAL wordmark) left; right: `● LIVE · OCT 07`
+  (green dot) when `navigator.onLine`, `● OFFLINE · OCT 07` (amber dot) when not — the app works either way.
+- **Today** (same 4 things, in this order):
+  1. Ticker strip (`Visuals.ticker`): one line, scrolls slowly sideways (paused under reduced motion; then it's just
+     horizontally scrollable).
+  2. Rotation panel: `ROTATION` label, `AT SEA · DAY 23/28 · HOME IN 6D` / `HOME · DAY 2/14 · OUT OCT 20` /
+     `HOME · OUT NOV 30` / `ADD YOUR BOAT DATE`; thin amber bar = progress through the current stretch; cyan EDIT → rotation sheet.
+  3. Next up: either the payday to-do panel (`PAYDAY TO-DO · OCT 01` + `2/3 DONE`; rows = square checkbox, sans step text,
+     mono sub line, right column amount + tag `DONE` green / `TO DO` amber; cyan `WHY? ›`) or `NEXT PAYDAY ~OCT 15 · IN 14D`
+     + the big amber **I GOT PAID** button. Reminder rows keep their current rules, restyled.
+  4. Left-to-spend quote panel (big `$740.00`; `▼ $38.00 TODAY` red or `NO SPENDING TODAY` muted; `$93 / DAY · 8 DAYS`
+     or `$100 HOME · $10 BOAT / DAY`; buttons `+ LOG PURCHASE` and `CAN I AFFORD IT?`). Not started → slim panel
+     `SEE WHAT'S LEFT TO SPEND` + `+ LOG PURCHASE`.
+  5. Progress panel: `PROGRESS · STAGE 2/3` / `CRUSH THE DEBT`, `Visuals.stageBar`, compact `Visuals.chart`, legend
+     `━ DEBT ━ SAVINGS`, `DEBT-FREE TARGET  NOV 2026` (or the existing friendly fallbacks). Tap → PROGRESS.
+- **Payday flow:** header `PAYDAY` + `OCT 15 → NEXT ~OCT 29`; quote `HIT YOUR BANK $2,000.00`; `Visuals.splitBar`
+  (amounts inside segments + legend); status panel showing the engine headline/note (green ok, amber tight/short);
+  the to-do list; `DONE FOR NOW`. Step A/B screens restyled the same way.
+- **Money (F2):** quote panel; Purchases table (DATE · WHERE (+ `ON VISA` tag when paid with a debt) · KIND code ·
+  AMOUNT red with −; grouped by day with day totals as now; tap → edit); Where it went (horizontal amber bars + comparison
+  `▼ $200 LESS THAN LAST TIME` green / `▲ $90 MORE THAN LAST TIME` muted); Accounts and What you owe tables (tap → set balance).
+- **Progress (F3):** targets (`DEBT-FREE TARGET NOV 2026`, `SAFE HARBOR TARGET OCT 2027`), the large `Visuals.chart`
+  (past solid, projection dotted, today marker), `Visuals.stageBar` with labels, `Visuals.meter` for savings
+  (`$1,262 / $4,450 · 28%`, cushion tick), `Visuals.debtTable` (NAME · BALANCE · paid-% mini bar · `NEXT` / `PAID ✓`
+  green tag), streak line `STREAK · 2 PAYDAYS ALL DONE`, Logbook table (DATE · AMOUNT · DONE 3/3).
+- **Settings, setup, sheets, dialogs, recap:** same content, terminal styling. Sheets: `--panel-2` with a 1px amber top
+  rule, mono uppercase title, dark inputs with amber focus ring, big mono money inputs. Setup progress dots → `STEP 3/10`
+  + segmented bar. Recap: `RECAP · BOAT STRETCH SEP 8 – OCT 5` + a small table (DEBT PAID, SAVED, SPENT, STEPS DONE, comparison).
+- **Terminal flash** (replaces confetti): a panel sweeps in from the left near the top — black with a green left rule,
+  amber `MILESTONE` label, big green mono title (e.g. `STORE CARD — PAID OFF`), the kind sans message, `KEEP GOING`
+  button — with a ~1s burst of small amber/green square sparks and a brief green edge glow. Reduced motion → the panel
+  just appears. (`Visuals.flash()`.)
+
+### 11.4 Visuals API v3 (`visuals.js` — replace the nautical builders; keep self-injected `v-` CSS)
+- `Visuals.chart(series, opts)` → SVG: debt line red, savings line green, projections dotted, today marker, optional
+  target label; `opts.compact` (Today, ~56px tall, no axes) vs full (Progress, ~200px, month ticks). Handles 0–1 points.
+- `Visuals.stageBar(info)` → HTML: 3 segments (done green, current amber filled to its fraction, upcoming gray) + captions
+  (`CUSHION ✓`, `DEBT 64%`, `SAFETY NET`). `info = { stage, cushionFrac, debtFrac, safetyFrac }`.
+- `Visuals.meter(jar, money)` → HTML savings meter. `Visuals.debtTable(debts, money)` → HTML table.
+- `Visuals.splitBar(plan, money)` → HTML allocation bar. `Visuals.ticker(items, money)` → HTML strip.
+- `Visuals.flash(opts)` → Promise; sparks + glow overlay, self-removing, no-op under reduced motion.
+
+### 11.5 Engine additions (no behaviour changes)
+- `Engine.series(state, today)` → `{ past: [{date, debt, savings}], future: [{date, debt, savings}], debtFree, safeHarbor }`:
+  past = replay sampled weekly from createdAt (always including today); future = the projection simulation sampled at
+  simulated paydays until Safe Harbor or 3 years (≤ 80 points). Debt = total of open debts.
+- `Engine.ticker(state, today)` → `[{ key, label, value, change, good }]`: SPEND (pot; change = −spent today; omitted when
+  not started), each open debt (change since the latest payday date, or 14 days ago with no payday; good when ≤ 0),
+  SAVINGS (same reference; good when ≥ 0).
+- `summary.spending.spentToday`, and `summary.stageInfo = { stage, cushionFrac, debtFrac, safetyFrac }`.
+- Remove emoji from every user-facing engine string (labels, why, headline, note, compare text, recap titles, milestone
+  title/message; e.g. "— that clears it!", "Back out to sea"). Keep the `emoji` fields for compatibility but set them to
+  a plain glyph ('★'). Update tests.
