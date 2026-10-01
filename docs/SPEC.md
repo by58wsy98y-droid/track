@@ -694,17 +694,17 @@ terse uppercase labels are fine, finance jargon is not (no P&L, liquidity, bps, 
   PROGRESS replaces Voyage (same content, terminal visuals).
 - **Header** on each tab: screen title (TODAY shows the HARBOR TERMINAL wordmark) left; right: `● LIVE · OCT 07`
   (green dot) when `navigator.onLine`, `● OFFLINE · OCT 07` (amber dot) when not — the app works either way.
-- **Today** (same 4 things, in this order):
+- **Today** (same things, in the mockup's order):
   1. Ticker strip (`Visuals.ticker`): one line, scrolls slowly sideways (paused under reduced motion; then it's just
      horizontally scrollable).
   2. Rotation panel: `ROTATION` label, `AT SEA · DAY 23/28 · HOME IN 6D` / `HOME · DAY 2/14 · OUT OCT 20` /
      `HOME · OUT NOV 30` / `ADD YOUR BOAT DATE`; thin amber bar = progress through the current stretch; cyan EDIT → rotation sheet.
-  3. Next up: either the payday to-do panel (`PAYDAY TO-DO · OCT 01` + `2/3 DONE`; rows = square checkbox, sans step text,
-     mono sub line, right column amount + tag `DONE` green / `TO DO` amber; cyan `WHY? ›`) or `NEXT PAYDAY ~OCT 15 · IN 14D`
-     + the big amber **I GOT PAID** button. Reminder rows keep their current rules, restyled.
-  4. Left-to-spend quote panel (big `$740.00`; `▼ $38.00 TODAY` red or `NO SPENDING TODAY` muted; `$93 / DAY · 8 DAYS`
+  3. Left-to-spend quote panel (big `$740.00`; `▼ $38.00 TODAY` red or `NO SPENDING TODAY` muted; `$93 / DAY · 8 DAYS`
      or `$100 HOME · $10 BOAT / DAY`; buttons `+ LOG PURCHASE` and `CAN I AFFORD IT?`). Not started → slim panel
      `SEE WHAT'S LEFT TO SPEND` + `+ LOG PURCHASE`.
+  4. Next up: either the payday to-do panel (`PAYDAY TO-DO · OCT 01` + `2/3 DONE`; rows = square checkbox, sans step text,
+     mono sub line, right column amount + tag `DONE` green / `TO DO` amber; cyan `WHY? ›`) or `NEXT PAYDAY ~OCT 15 · IN 14D`
+     + the big amber **I GOT PAID** button. Reminder rows keep their current rules, restyled.
   5. Progress panel: `PROGRESS · STAGE 2/3` / `CRUSH THE DEBT`, `Visuals.stageBar`, compact `Visuals.chart`, legend
      `━ DEBT ━ SAVINGS`, `DEBT-FREE TARGET  NOV 2026` (or the existing friendly fallbacks). Tap → PROGRESS.
 - **Payday flow:** header `PAYDAY` + `OCT 15 → NEXT ~OCT 29`; quote `HIT YOUR BANK $2,000.00`; `Visuals.splitBar`
