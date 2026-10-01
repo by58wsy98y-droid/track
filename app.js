@@ -1277,12 +1277,13 @@
     const emoji = { ok: '✅', tight: '🤔', wait: '✋' }[a.verdict] || '🤔';
     const tile = function (label, per) {
       const pd = perText(per, sp);
-      return '<div class="tile"><span>' + label + '</span><b>' + esc(leftWords(per.left)) + '</b>' + (pd ? '<small>' + esc(pd) + '</small>' : '') + '</div>';
+      const amt = per.left < 0 ? money(-per.left) + ' over' : money(per.left);
+      return '<div class="tile"><span>' + label + '</span><b>' + esc(amt) + '</b>' + (pd ? '<small>' + esc(pd) + '</small>' : '') + '</div>';
     };
     return '<div class="verdict verdict-' + a.verdict + '">' +
       '<div class="verdict-head"><span class="verdict-emoji" aria-hidden="true">' + emoji + '</span><p class="verdict-text">' + esc(a.headline) + '</p></div>' +
       (a.sub && !a.started ? '<p class="verdict-sub">' + esc(a.sub) + '</p>' : '') +
-      '<div class="tiles verdict-tiles">' + tile('Now', a.before) + '<span class="arrow" aria-hidden="true">→</span>' + tile('After', a.after) + '</div></div>';
+      '<div class="tiles verdict-tiles">' + tile('Left now', a.before) + '<span class="arrow" aria-hidden="true">→</span>' + tile('Left after', a.after) + '</div></div>';
   }
 
   function openAffordSheet() {
