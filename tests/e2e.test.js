@@ -72,7 +72,7 @@ const P1 = [
 const P2 = [
   ['Leave $35 in checking for bills', 35],
   ['Move $590 to your spending card', 590],
-  ['Pay $500 on Store card — that clears it! 🎉', 500],
+  ['Pay $500 on Store card — that clears it!', 500],
   ['Pay $573 extra on Visa', 573],
   ['Move $302 to savings', 302],
 ];
@@ -136,7 +136,7 @@ async function runDevice(browser, srv, deviceName) {
 
     await page.fill('#f-boat', '2026-09-08');
     await page.dispatchEvent('#f-boat', 'change');
-    assert.match(await page.textContent('#boat-preview'), /day 23 of 28 — home Oct 6/);
+    assert.match(await page.textContent('#boat-preview'), /day 23 of 28 on the boat — home Oct 6/);
     await r.next();
 
     await page.click('[data-action=pickCurrency][data-v=USD]');
@@ -207,8 +207,8 @@ async function runDevice(browser, srv, deviceName) {
     assert.deepEqual([st0.settings.boatDate, st0.settings.payAmount, st0.settings.payFreq, st0.settings.homeSpend, st0.settings.boatSpend],
       ['2026-09-08', 2000, 'biweekly', 1400, 280]);
     const banner = (await page.textContent('.banner-text')).replace(/\s+/g, ' ').trim();
-    assert.equal(banner, '🚢 Day 23 of 28 · home in 6 days');
-    assert.deepEqual(await page.$$eval('.tab', (e) => e.map((x) => x.textContent.trim())), ['Today', 'Money', 'Voyage', 'Settings']);
+    assert.equal(banner, 'At sea · Day 23/28 · Home in 6d');
+    assert.deepEqual(await page.$$eval('.tab span', (e) => e.map((x) => x.textContent.trim())), ['Today', 'Money', 'Progress', 'Settings']);
     assert.ok(await page.$('.spend-invite'), 'Today invites logging when nothing is logged');
     await r.noSideScroll('today after setup');
 
@@ -248,12 +248,12 @@ async function runDevice(browser, srv, deviceName) {
     const st1 = await r.state();
     assert.equal(st1.paydays.length, 1);
     assert.deepEqual(Object.keys(st1.paydays[0].ticks).sort(), ['bills', 'save', 'spend']);
-    assert.match(await page.textContent('.next-card'), /Next payday: around Oct 15/);
+    assert.match(await page.textContent('.next-card'), /Around Oct 15/);
     assert.match(await page.textContent('.progress-card'), /\$960/);
 
     // ------------------------------------------------------------ 3. welcome-home recap (Oct 7), once
     await r.at('2026-10-07');
-    assert.match(await page.textContent('.banner-text'), /Day 2 of 14 · back out Oct 20/);
+    assert.match(await page.textContent('.banner-text'), /Day 2\/14 · Out Oct 20/);
     const recap = await page.$('.layer .celebrate');
     assert.ok(recap, 'welcome-home recap appears');
     const recapText = await recap.textContent();
@@ -292,7 +292,7 @@ async function runDevice(browser, srv, deviceName) {
     let toastText = await setBoat('2026-10-27');
     assert.notEqual(await spendOf(), 590, 'spending money follows the new home days');
     assert.equal(toastText, 'Got it. Your spending money for this payday is now ' + '$' + (await spendOf()).toLocaleString('en-US') + '.');
-    assert.match(await page.textContent('.banner-text'), /Day 10 of 21/);
+    assert.match(await page.textContent('.banner-text'), /Day 10\/21/);
     // …and moving it back gives the original plan again.
     toastText = await setBoat('2026-09-08');
     assert.equal(toastText, 'Got it. Your spending money for this payday is now $590.');
@@ -316,7 +316,7 @@ async function runDevice(browser, srv, deviceName) {
 
     // Tick the rest from the Today screen.
     await page.waitForSelector('.next-card .tick');
-    assert.match(await page.textContent('.next-card .card-count'), /1 of 5 done/);
+    assert.match(await page.textContent('.next-card .card-count'), /1\/5 done/);
     const celebrated = [];
     for (let i = 0; i < 4; i++) {
       await page.click('.next-card .tick[aria-checked=false] >> nth=0');
@@ -341,10 +341,11 @@ async function runDevice(browser, srv, deviceName) {
 
     // ------------------------------------------------------------ 5. Voyage + Settings
     await page.click('.tab[data-to=voyage]');
-    await page.waitForSelector('.v-route');
-    assert.ok(await page.$('.v-jar'), 'jar');
-    assert.equal(await page.$$eval('.v-debts .v-debt', (e) => e.length), 2, 'two debt bars');
-    assert.match(await page.textContent('.page-title'), /Debt-free by/);
+    await page.waitForSelector('.v-chart');
+    assert.ok(await page.$('.v-meter'), 'savings meter');
+    assert.ok(await page.$('.v-stage'), 'stage bar');
+    assert.equal(await page.$$eval('.v-dt-row:not(.v-dt-head)', (e) => e.length), 2, 'two debt rows');
+    assert.match(await page.textContent('.targets'), /Debt-free target/);
     assert.equal(await page.$$eval('.log-row', (e) => e.length), 2, 'logbook has 2 paydays');
     await r.noSideScroll('voyage');
     await page.click('.tab[data-to=settings]');
@@ -359,8 +360,8 @@ async function runDevice(browser, srv, deviceName) {
     // Changing a debt's minimum doesn't rewrite its past: today's balance stays put.
     const visaLeft = async () => {
       await page.click('.tab[data-to=voyage]');
-      await page.waitForSelector('.v-debt');
-      const t = await page.$$eval('.v-debt', (e) => e.filter((x) => /Visa/.test(x.textContent)).map((x) => x.querySelector('.v-debt-amt').textContent)[0]);
+      await page.waitForSelector('.v-dt-row');
+      const t = await page.$$eval('.v-dt-row', (e) => e.filter((x) => /Visa/i.test(x.textContent)).map((x) => x.querySelector('.v-dt-bal').textContent)[0]);
       await page.click('.tab[data-to=settings]');
       await page.waitForSelector('.page-title');
       return t;
@@ -466,10 +467,10 @@ async function runDevice(browser, srv, deviceName) {
     try {
       await page.goto(base + '?today=2026-10-29');
       await page.waitForSelector('.banner', { timeout: 10000 });
-      assert.match(await page.textContent('.banner-text'), /Day 10 of 28/);
+      assert.match(await page.textContent('.banner-text'), /Day 10\/28/);
       assert.equal((await r.state()).paydays.length, 2);
       await page.click('.tab[data-to=voyage]');
-      await page.waitForSelector('.v-route');
+      await page.waitForSelector('.v-chart');
     } finally {
       await ctx.setOffline(false);
       srv.offline = false;
@@ -495,7 +496,7 @@ async function runMoney(browser, srv, deviceName) {
   const r = makeRunner(page, srv.base, errors);
   const toastText = async () => { await page.waitForTimeout(150); return (await page.textContent('#toast')).trim(); };
   const closeLayer = async () => { await page.keyboard.press('Escape'); await page.waitForSelector('.layer', { state: 'detached' }); };
-  const spendAmt = () => page.textContent('.spend-card .spend-amt');
+  const spendAmt = async () => (await page.textContent('.spend-card .spend-amt')).replace(/\.00$/, '');
   const submitLayer = async () => {
     await page.click('.layer button[type=submit]');
     await page.waitForSelector('.layer', { state: 'detached' });
@@ -541,7 +542,7 @@ async function runMoney(browser, srv, deviceName) {
     assert.deepEqual(st.purchases, []);
     assert.equal(st.paydays.length, 1);
     assert.equal(st.debts[0].name, 'Visa');
-    assert.match(await page.textContent('.next-card'), /Next payday: around Oct 15/);
+    assert.match(await page.textContent('.next-card'), /Around Oct 15/);
     assert.ok(await page.$('.spend-invite'), 'not logging yet: slim invite on Today');
     assert.equal(await page.$('.spend-card'), null);
     await r.dismissPopups();
@@ -622,7 +623,7 @@ async function runMoney(browser, srv, deviceName) {
     assert.equal(await spendAmt(), '$740');
     assert.deepEqual(await page.$$eval('.buy-day > span:first-child', (e) => e.map((x) => x.textContent)), ['Today']);
     assert.equal(await page.$$eval('.buy-row', (e) => e.length), 3);
-    assert.match(await page.textContent('.buy-row >> nth=0'), /Amazon — boots.*Shopping · 💳 Visa.*\$120/);
+    assert.match(await page.textContent('.buy-row >> nth=0'), /Amazon — boots.*On Visa.*SHOP.*120\.00/);
     assert.match(await page.textContent('.where-card'), /This boat stretch so far\s*\$210/);
     assert.match(await page.textContent('.where-card .bars.is-places'), /Amazon/);
     assert.match(await page.textContent('.group [data-action=owe]'), /Visa\s*\$1,320 left/, 'the Visa purchase adds to what you owe');
@@ -689,8 +690,9 @@ async function runMoney(browser, srv, deviceName) {
     pop = await page.$('.layer .celebrate');
     assert.ok(pop, 'back-out-to-sea recap');
     txt = await pop.textContent();
-    assert.match(txt, /Back out to sea ⚓/);
-    assert.match(txt, /While you were home \(Oct 6 – Oct 19\)/);
+    assert.match(txt, /Back out to sea/);
+    assert.match(txt, /Home stretch · Oct 6 – Oct 19/);
+    assert.match(txt, /While you were home/);
     assert.match(txt, /Spent: \$64 — top: Walmart \$64/);
     await r.dismissPopups();
     await r.at('2026-10-20');

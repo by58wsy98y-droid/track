@@ -15,7 +15,7 @@
   const $file = $('restore-file');
 
   if (!E || !V) {
-    $app.innerHTML = '<div class="boot"><p class="boot-title">⚓ Harbor</p>' +
+    $app.innerHTML = '<div class="boot"><p class="boot-title">HARBOR TERMINAL</p>' +
       '<p class="muted">Harbor couldn\'t start. Close it and open it again.</p></div>';
     return;
   }
@@ -118,6 +118,32 @@
 
   let domSeq = 0;
   function domId(p) { domSeq++; return (p || 'h') + domSeq; }
+
+  // Terminal figures: 1,152.00 (no symbol), for tables and amount columns.
+  function fig(n) {
+    return Math.abs(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  // A big quote like a share price: "$740" with ".00" smaller and dimmer.
+  function quoteHTML(n) {
+    n = E.round2(Number(n) || 0);
+    const whole = Math.trunc(Math.abs(n));
+    const cents = Math.round((Math.abs(n) - whole) * 100);
+    return '<span class="q-whole">' + esc((n < 0 ? '-' : '') + money(whole)) + '</span>' +
+      '<span class="q-cents">.' + (cents < 10 ? '0' : '') + cents + '</span>';
+  }
+  const CAT_CODE = { eat: 'EAT', delivery: 'DLVR', groceries: 'GROC', gas: 'GAS', fun: 'FUN', shopping: 'SHOP', travel: 'TRVL', other: 'OTHR' };
+
+  // Screen header: title (or the wordmark) and a LIVE/OFFLINE status with the date.
+  function headHTML(title) {
+    const online = navigator.onLine !== false;
+    const d = today();
+    const date = MONTHS[+d.slice(5, 7) - 1].toUpperCase() + ' ' + d.slice(8, 10);
+    return '<header class="term-head">' +
+      (title ? '<h1 class="term-title page-title">' + esc(title) + '</h1>'
+        : '<h1 class="brand">Harbor <span>Terminal</span><span class="sr-only"> — Today</span></h1>') +
+      '<span class="term-status' + (online ? '' : ' is-off') + '"><i aria-hidden="true"></i>' +
+      (online ? 'Live' : 'Offline') + ' · ' + date + '</span></header>';
+  }
 
   // ------------------------------------------------------------------ money
 
@@ -322,20 +348,31 @@
     const st = E.rotation.status(Object.assign({}, state.settings, { boatDate: iso }), today());
     if (!st) return '';
     const when = st.daysLeft === 1 ? 'tomorrow' : D.fmtShort(st.changeDate);
-    if (st.where === 'boat') return '🚢 So today is day ' + st.day + ' of ' + st.of + ' — home ' + when + '.';
-    if (st.day) return '🏠 So today is day ' + st.day + ' of ' + st.of + ' at home — back out ' + when + '.';
-    return '🏠 So you\'re home for now — back out ' + when + '.';
+    if (st.where === 'boat') return 'So today is day ' + st.day + ' of ' + st.of + ' on the boat — home ' + when + '.';
+    if (st.day) return 'So today is day ' + st.day + ' of ' + st.of + ' at home — back out ' + when + '.';
+    return 'So you\'re home for now — back out ' + when + '.';
   }
 
+  // Plain words (for screen readers): "On the boat, day 23 of 28, home in 6 days".
   function bannerText(st) {
-    if (!st) return '⚓ Tap to add your boat date';
+    if (!st) return 'Add your boat date';
     if (st.where === 'boat') {
       const left = st.daysLeft <= 0 ? 'home today' : st.daysLeft === 1 ? 'home tomorrow' : 'home in ' + st.daysLeft + ' days';
-      return '🚢 Day ' + st.day + ' of ' + st.of + ' · ' + left;
+      return 'On the boat, day ' + st.day + ' of ' + st.of + ', ' + left;
     }
     const back = 'back out ' + (st.daysLeft === 1 ? 'tomorrow' : D.fmtShort(st.changeDate));
-    if (st.day) return '🏠 Day ' + st.day + ' of ' + st.of + ' · ' + back;
-    return '🏠 Home · ' + back;
+    if (st.day) return 'Home, day ' + st.day + ' of ' + st.of + ', ' + back;
+    return 'Home, ' + back;
+  }
+  // Terminal line: "AT SEA · DAY 23/28 · HOME IN 6D" / "HOME · DAY 2/14 · OUT OCT 20".
+  function rotLine(st) {
+    if (!st) return 'Add your boat date';
+    if (st.where === 'boat') {
+      const left = st.daysLeft <= 0 ? 'Home today' : st.daysLeft === 1 ? 'Home tomorrow' : 'Home in ' + st.daysLeft + 'd';
+      return 'At sea · Day ' + st.day + '/' + st.of + ' · ' + left;
+    }
+    const back = st.daysLeft === 1 ? 'Out tomorrow' : 'Out ' + D.fmtShort(st.changeDate);
+    return st.day ? 'Home · Day ' + st.day + '/' + st.of + ' · ' + back : 'Home · ' + back;
   }
 
   function stretchesHTML(iso) {
@@ -344,7 +381,7 @@
     const list = E.rotation.upcoming(s, today(), 4);
     return list.map(function (x, i) {
       const days = D.diffDays(x.start, x.end) + 1;
-      return '<li class="' + (i === 0 ? 'is-now' : '') + '"><span aria-hidden="true">' + (x.where === 'boat' ? '🚢' : '🏠') + '</span>' +
+      return '<li class="' + (i === 0 ? 'is-now' : '') + '"><span class="st-tag' + (x.where === 'boat' ? ' is-sea' : '') + '">' + (x.where === 'boat' ? 'At sea' : 'Home') + '</span>' +
         '<span>' + esc(D.fmtRange(x.start, x.end)) + (i === 0 ? '<span class="sr-only"> (now)</span>' : '') + '</span>' +
         '<span class="len">' + plural(days, 'day') + (x.where === 'boat' ? ' on' : ' home') + '</span></li>';
     }).join('');
@@ -372,9 +409,11 @@
           '<span class="box">' + ICON.check + '</span>' +
           '<span class="item-text"><span class="item-label">' + esc(it.label) + '</span>' +
           (it.sub ? '<span class="item-sub">' + esc(it.sub) + '</span>' : '') + '</span></button>';
+      const tag = moved ? '<span class="tag">Moved</span>' : on ? '<span class="tag is-good">Done</span>' : '<span class="tag is-todo">To do</span>';
       return '<li class="item' + (moved ? ' is-moved' : '') + '"><div class="item-row">' + main +
+        '<span class="item-amt" aria-hidden="true"><b class="' + (it.clears ? 'is-good' : '') + '">' + fig(it.amount) + '</b>' + tag + '</span>' +
         '<button type="button" class="why-btn" aria-expanded="' + open + '" aria-controls="' + whyId + '" data-action="why" data-wk="' + esc(wk) +
-        '" data-fk="w:' + esc(wk) + '">why?</button></div>' +
+        '" data-fk="w:' + esc(wk) + '">Why? ›</button></div>' +
         (open ? '<div class="why" id="' + whyId + '">' + esc(it.why || '') + (it.kind === 'bills' ? billsListHTML(pd.plan) : '') + '</div>' : '') +
         '</li>';
     }).join('') + '</ul>';
@@ -402,7 +441,7 @@
   }
 
   function streakText(n) {
-    return n === 1 ? '⭐ 1 payday all ticked off' : '⭐ ' + n + ' paydays in a row, all ticked off';
+    return n === 1 ? 'Streak · 1 payday all done' : 'Streak · ' + n + ' paydays in a row, all done';
   }
 
   // ================================================================== SETUP (§6.1)
@@ -414,16 +453,17 @@
     const i = ui.setupStep;
     let dots = '';
     if (i > 0) {
-      dots = '<div class="dots" role="img" aria-label="Step ' + Math.min(i, DOT_STEPS) + ' of ' + DOT_STEPS + '">';
+      const n = Math.min(i, DOT_STEPS);
+      dots = '<div class="steps" role="img" aria-label="Step ' + n + ' of ' + DOT_STEPS + '"><span class="steps-n">Step ' + n + '/' + DOT_STEPS + '</span><span class="steps-bar">';
       for (let k = 1; k <= DOT_STEPS; k++) dots += '<span class="dot' + (k < i ? ' is-done' : k === i ? ' is-now' : '') + '"></span>';
-      dots += '</div>';
-    } else dots = '<span></span>';
+      dots += '</span></div>';
+    } else dots = '<span class="brand brand-sm">Harbor <span>Terminal</span></span>';
     return '<form class="setup" data-submit="setupNext" novalidate autocomplete="off">' +
       '<div class="topbar">' +
       (i > 0 ? '<button type="button" class="icon-btn" data-action="setupBack" aria-label="Back">' + ICON.back + '</button>' : '<span></span>') +
       dots + '<span></span></div>' +
       '<div class="setup-body">' +
-      (o.emoji ? '<div class="q-emoji" aria-hidden="true">' + o.emoji + '</div>' : '') +
+
       '<h1 class="q-title" id="q-title" tabindex="-1">' + esc(o.title) + '</h1>' +
       (o.lead ? '<p class="q-lead">' + esc(o.lead) + '</p>' : '') +
       '<div class="q-body">' + (o.body || '') + '</div></div>' +
@@ -441,7 +481,7 @@
       let body = '';
       if (showHome) {
         body += '<div class="hint-card">' +
-          '<p class="hint-title">📲 Add Harbor to your Home Screen first, then set up there.</p>' +
+          '<p class="hint-title">Add Harbor to your Home Screen first, then set up there.</p>' +
           '<p>Your ' + device + ' keeps the Home Screen app\'s data separate from Safari.</p>' +
           (ui.hintOpen ? '<ol class="hint-steps">' +
             '<li>Tap <b>Share</b> ↑ (on iPhone you may need to tap ••• first).</li>' +
@@ -453,7 +493,7 @@
       }
       body += '<div class="links" style="margin-top:22px"><button type="button" class="link" data-action="restore">Have a backup file? Restore it</button></div>';
       return setupFrame({
-        emoji: '⚓', title: 'Hi! Let\'s set up your money plan.',
+        title: 'Hi! Let\'s set up your money plan.',
         lead: 'About 5 minutes. Skip anything you\'re not sure of.',
         body: body, next: 'Let\'s go', skip: false, foot: !showHome,
       });
@@ -462,7 +502,7 @@
     boat: function () {
       const v = state.settings.boatDate || '';
       return setupFrame({
-        emoji: '🚢', title: 'When do you next get on the boat?', lead: 'Already on it? Pick the day you got on.',
+        title: 'When do you next get on the boat?', lead: 'Already on it? Pick the day you got on.',
         body: '<label class="field"><span class="field-label">Boat date</span>' +
           '<input class="input" type="date" id="f-boat" value="' + esc(v) + '" data-live="boatPreview" data-preview="boat-preview"></label>' +
           '<div class="preview" id="boat-preview" aria-live="polite">' + esc(rotationPreview(v)) + '</div>',
@@ -473,7 +513,7 @@
       const s = state.settings;
       const other = ui.otherCur || s.currency === 'XXX';
       return setupFrame({
-        emoji: '💱', title: 'What money do you use?',
+        title: 'What money do you use?',
         body: currencyChoicesHTML('pickCurrency') + (other ? symbolFieldHTML() : ''),
         onlySkip: !other,
       });
@@ -481,7 +521,7 @@
 
     pay: function () {
       return setupFrame({
-        emoji: '💰', title: 'When payday comes, how much usually lands in your bank?',
+        title: 'When payday comes, how much usually lands in your bank?',
         body: '<label class="field"><span class="field-label">A normal paycheck</span>' +
           moneyField('f-pay', state.settings.payAmount, { big: true, autofocus: true }) +
           '<span class="field-help">Just a normal one — it\'s fine if it changes.</span></label>',
@@ -490,7 +530,7 @@
 
     freq: function () {
       return setupFrame({
-        emoji: '📅', title: 'How often do you get paid?',
+        title: 'How often do you get paid?',
         body: freqChoicesHTML('pickFreq'),
         onlySkip: true,
       });
@@ -505,8 +545,8 @@
         }).join('') + '</ul>'
         : '<p class="empty-note">No bills added yet.</p>';
       return setupFrame({
-        emoji: '🧾', title: 'What bills do you pay?', lead: 'Phone, insurance, rent, subscriptions… Debts come next.',
-        body: list + '<button type="button" class="btn btn-soft" data-action="addBill">＋ Add a bill</button>',
+        title: 'What bills do you pay?', lead: 'Phone, insurance, rent, subscriptions… Debts come next.',
+        body: list + '<button type="button" class="btn btn-soft" data-action="addBill">+ Add a bill</button>',
       });
     },
 
@@ -520,15 +560,15 @@
         }).join('') + '</ul>'
         : '<p class="empty-note">No debts added yet. None? Lucky you — tap Next.</p>';
       return setupFrame({
-        emoji: '💳', title: 'Anything you owe?', lead: 'Credit cards, loans, Afterpay, money you promised someone.',
-        body: list + '<button type="button" class="btn btn-soft" data-action="addDebt">＋ Add a debt</button>',
+        title: 'Anything you owe?', lead: 'Credit cards, loans, Afterpay, money you promised someone.',
+        body: list + '<button type="button" class="btn btn-soft" data-action="addDebt">+ Add a debt</button>',
       });
     },
 
     savings: function () {
       const a = state.savings.amount;
       return setupFrame({
-        emoji: '🏦', title: 'How much do you have saved right now?', lead: money(0) + ' is totally fine.',
+        title: 'How much do you have saved right now?', lead: money(0) + ' is totally fine.',
         body: '<label class="field"><span class="field-label">Saved right now</span>' +
           moneyField('f-sav', a > 0 ? a : null, { big: true, autofocus: true }) + '</label>',
       });
@@ -538,7 +578,7 @@
       const acc = E.accounts(state, today());
       const typed = function (id) { const a = acc.find(function (x) { return x.id === id; }); return a && a.asOf ? a.balance : null; };
       return setupFrame({
-        emoji: '💳', title: 'What\'s in checking and on your spending card right now?',
+        title: 'What\'s in checking and on your spending card right now?',
         lead: 'Open your bank app and copy what it says. Not sure? Skip it — you can add these any time under Money.',
         body: '<label class="field"><span class="field-label">Checking</span>' +
           moneyField('f-chk', typed('checking'), { enter: 'next' }) + '</label>' +
@@ -555,12 +595,12 @@
       const home = s.homeSpend != null ? s.homeSpend : (sug.ok ? sug.home : null);
       const boat = s.boatSpend != null ? s.boatSpend : (sug.ok ? sug.boat : null);
       const body =
-        stepperHTML('f-home', '🏠 ' + s.offDays + ' days at home', home, 50, s.offDays) +
-        stepperHTML('f-boatspend', '🚢 ' + s.onDays + ' days on the boat', boat, 10, s.onDays) +
+        stepperHTML('f-home', s.offDays + ' days at home', home, 50, s.offDays) +
+        stepperHTML('f-boatspend', s.onDays + ' days on the boat', boat, 10, s.onDays) +
         '<div id="spend-note" aria-live="polite">' + spendNoteHTML(home, boat) + '</div>' +
         (hasPay ? '' : '');
       return setupFrame({
-        emoji: '🛒', title: 'Spending money',
+        title: 'Spending money',
         lead: 'For everything that isn\'t a bill: groceries, gas, going out, shopping.',
         body: body,
       });
@@ -574,7 +614,7 @@
         'Grow your savings to cover ' + plural(state.settings.safetyMonths || 3, 'month') + ' of bills and spending.',
       ];
       return setupFrame({
-        emoji: '⚓', title: 'You\'re all set', lead: 'Here\'s your plan, in 3 steps:',
+        title: 'You\'re all set', lead: 'Here\'s your plan, in 3 steps:',
         body: '<ol class="plan-steps">' + steps.map(function (t, i) {
           return '<li><span class="num">' + (i + 1) + '</span><span>' + esc(t) + '</span></li>';
         }).join('') + '</ol><p class="field-help" style="margin-top:18px">You can change anything later in Settings.</p>',
@@ -732,32 +772,39 @@
 
   function renderToday() {
     const s = summary();
-    return '<h1 class="sr-only">Today</h1>' + bannerHTML(s) + '<div class="today-grid">' + nextCardHTML(s) +
-      '<div class="today-side">' + spendCardHTML(s, false) + progressCardHTML(s) + '</div></div>';
+    return headHTML(null) + V.ticker(s.ticker) + bannerHTML(s) +
+      '<div class="today-grid"><div class="today-main">' + spendCardHTML(s, false) + nextCardHTML(s) + '</div>' +
+      '<div class="today-side">' + progressCardHTML(s) + '</div></div>';
   }
 
   function bannerHTML(s) {
-    return '<button type="button" class="banner" data-action="rotation" aria-label="' + esc(bannerText(s.rotation) + '. Tap to change your boat date.') + '">' +
-      '<span class="banner-text">' + (s.rotation
-        ? bannerText(s.rotation).split(' · ').map(function (x) { return '<span class="nowrap">' + esc(x) + '</span>'; }).join(' · ')
-        : esc(bannerText(null))) + '</span>' +
-      (s.rotation ? '<span class="banner-go" aria-hidden="true">Change</span>' : '<span class="chev" aria-hidden="true">›</span>') + '</button>';
+    const st = s.rotation;
+    const parts = rotLine(st).split(' · ');
+    const last = parts.pop();
+    const frac = st && st.day && st.of ? Math.max(0.03, Math.min(1, st.day / st.of)) : 0;
+    return '<button type="button" class="banner" data-action="rotation" aria-label="' + esc(bannerText(st) + '. Tap to change your boat date.') + '">' +
+      '<span class="banner-main"><span class="lbl">Rotation</span><span class="banner-text">' +
+      parts.map(function (x) { return '<span class="nowrap">' + esc(x) + '</span>'; }).join(' · ') + (parts.length ? ' · ' : '') +
+      '<em class="nowrap">' + esc(last) + '</em></span></span>' +
+      '<span class="banner-go" aria-hidden="true">' + (st ? 'Edit' : 'Add') + '</span>' +
+      (frac ? '<span class="banner-bar' + (st.where === 'boat' ? ' is-sea' : '') + '" aria-hidden="true"><i style="width:' + Math.round(frac * 100) + '%"></i></span>' : '') +
+      '</button>';
   }
 
   // At most one reminder, in priority order: Safari tab, backup, check-in.
   function remindersHTML(s) {
     let h = '';
     if (IS_APPLE && !isStandalone() && state.setupDone && !ui.safariLater) {
-      h = '<div class="remind remind-safari"><span class="remind-text">📲 Harbor is open in Safari<small>Safari can erase it if you don\'t open it for a week.</small></span>' +
+      h = '<div class="remind remind-safari"><span class="remind-text">Harbor is open in Safari<small>Safari can erase it if you don\'t open it for a week.</small></span>' +
         '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="safariHow">How?</button>' +
         '<button type="button" class="btn btn-text btn-small" data-action="safariLater">Later</button></span></div>';
     } else if (s.backupDue) {
       const last = state.meta.lastBackupAt ? fdate(state.meta.lastBackupAt) : 'never';
-      h = '<div class="remind"><span class="remind-text">💾 Back up your data<small>Last: ' + esc(last) + '</small></span>' +
+      h = '<div class="remind"><span class="remind-text">Back up your data<small>Last: ' + esc(last) + '</small></span>' +
         '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="backup">Back up</button>' +
         '<button type="button" class="btn btn-text btn-small" data-action="snoozeBackup">Later</button></span></div>';
     } else if (s.checkinDue) {
-      h = '<div class="remind"><span class="remind-text">🔎 Monthly check-in<small>30 seconds</small></span>' +
+      h = '<div class="remind"><span class="remind-text">Monthly check-in<small>30 seconds</small></span>' +
         '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="checkin">Start</button>' +
         '<button type="button" class="btn btn-text btn-small" data-action="snoozeCheckin">Not now</button></span></div>';
     }
@@ -768,7 +815,7 @@
     const html = sheetHead('Keep Harbor safe', domId('saf')) +
       '<ol class="safe-steps">' +
       '<li><span class="num">1</span><div><b>Make a backup</b>' +
-      '<button type="button" class="btn btn-soft btn-small" data-la="backup">💾 Back up</button></div></li>' +
+      '<button type="button" class="btn btn-soft btn-small" data-la="backup">Back up</button></div></li>' +
       '<li><span class="num">2</span><div>Tap <b>Share</b> ↑ (on iPhone you may need to tap ••• first), then <b>Add to Home Screen</b>. Keep <b>Open as Web App</b> on, then tap <b>Add</b>.</div></li>' +
       '<li><span class="num">3</span><div>Open Harbor from the new icon and tap <b>“Have a backup file? Restore it”</b>.</div></li>' +
       '</ol>' +
@@ -781,12 +828,12 @@
     if (latest && s.openItems.length) {
       const c = doneCount(latest);
       return '<section class="card next-card" aria-labelledby="next-title">' +
-        '<div class="card-head"><h2 class="card-title" id="next-title">From your payday</h2><span class="card-count">' + c.done + ' of ' + c.total + ' done</span></div>' +
+        '<div class="card-head"><h2 class="card-title" id="next-title">Payday to-do · ' + esc(D.fmtShort(latest.date)) + '</h2><span class="card-count">' + c.done + '/' + c.total + ' done</span></div>' +
         '<p class="next-sub">' + esc(money(latest.amount) + ' on ' + fdate(latest.date)) + '</p>' +
         checklistHTML(latest) +
         '<div class="links"><button type="button" class="link" data-action="fixPayday" data-id="' + esc(latest.id) + '">Fix amount</button>' +
         '<button type="button" class="link link-muted" data-action="undoPayday" data-id="' + esc(latest.id) + '">Undo payday</button></div>' +
-        '<button type="button" class="btn btn-soft btn-again" data-action="startPayday">💰 I got paid again</button>' +
+        '<button type="button" class="btn btn-soft btn-again" data-action="startPayday">I got paid again</button>' +
         '</section>';
     }
     let title, sub;
@@ -795,51 +842,47 @@
       sub = 'When your pay lands, tap the button below.';
     } else {
       const diff = D.diffDays(today(), s.nextPayday);
-      if (diff >= 2) { title = 'Next payday: around ' + fdate(s.nextPayday); sub = 'in ' + diff + ' days'; }
-      else if (diff === 1) { title = 'Next payday: around ' + fdate(s.nextPayday); sub = 'tomorrow'; }
-      else if (diff === 0) { title = 'Payday is around today'; sub = 'Tap the button when it lands.'; }
-      else { title = 'Payday was due around ' + fdate(s.nextPayday); sub = 'Tap the button when it lands.'; }
+      if (diff >= 2) { title = 'Around ' + fdate(s.nextPayday); sub = 'in ' + diff + ' days'; }
+      else if (diff === 1) { title = 'Around ' + fdate(s.nextPayday); sub = 'tomorrow'; }
+      else if (diff === 0) { title = 'Around today'; sub = 'Tap the button when it lands.'; }
+      else { title = 'Was due around ' + fdate(s.nextPayday); sub = 'Tap the button when it lands.'; }
     }
     return '<section class="card next-card" aria-labelledby="next-title">' +
-      '<p class="next-when" id="next-title">' + esc(title).replace(/(around|due around) (\w{3} \d+(, \d{4})?)$/, '$1 <span class="nowrap">$2</span>') + '</p><p class="next-sub">' + esc(sub) + '</p>' +
-      (latest ? '<p class="next-done">✓ Everything from your ' + esc(fdate(latest.date)) + ' payday is done.</p>' : '') +
-      '<button type="button" class="btn btn-paid" data-action="startPayday">💰 I got paid</button>' +
+      '<div class="card-head"><h2 class="card-title" id="next-title">Next payday</h2>' +
+      (latest ? '<span class="card-count is-good">✓ All done</span>' : '') + '</div>' +
+      '<p class="next-when">' + esc(title).replace(/(Around|around) (\w{3} \d+(, \d{4})?)$/, '$1 <span class="nowrap">$2</span>') + ' <span class="next-sub">· ' + esc(sub) + '</span></p>' +
+      (latest ? '<p class="next-done">Everything from your ' + esc(fdate(latest.date)) + ' payday is done.</p>' : '') +
+      '<button type="button" class="btn btn-paid" data-action="startPayday">I got paid</button>' +
       remindersHTML(s) + '</section>';
   }
 
-  function stageLineHTML(s) {
-    if (s.stage === 4) return esc('You made it to Safe Harbor ⚓');
-    return esc('Stage ' + s.stage + ' of 3') + ' <span class="nowrap">· ' + esc(s.stageName) + '</span>';
-  }
-  // { text, soft }
-  function goalLine(s) {
+  function stageLabel(s) { return s.stage === 4 ? 'All stages done' : 'Stage ' + s.stage + '/3'; }
+  // The headline target as a label/value pair: "Debt-free target · November 2026".
+  function targetKV(s) {
     const p = s.projection || {};
-    if (s.stage === 4) return { text: 'Your safety net is full' };
+    if (s.stage === 4) return { label: 'Safety net', value: 'Full ✓', cls: 'is-good' };
     if (p.alreadyDebtFree) {
-      if (!s.debts.length) {
-        return p.safeHarbor ? { text: 'Safe Harbor by ' + D.fmtMonthYear(p.safeHarbor) } : { text: 'No debts added', soft: true };
-      }
-      return p.safeHarbor ? { text: 'Safe Harbor by ' + D.fmtMonthYear(p.safeHarbor) } : { text: 'Debt-free ✓ Now growing your safety net' };
+      if (p.safeHarbor) return { label: 'Safe Harbor target', value: D.fmtMonthYear(p.safeHarbor), cls: 'is-amber' };
+      return s.debts.length ? { label: 'Debt', value: 'Paid off ✓', cls: 'is-good' } : { label: 'Debts', value: 'None added', cls: 'is-soft' };
     }
-    if (p.debtFree) return { text: 'Debt-free by ' + D.fmtMonthYear(p.debtFree) };
-    if (p.reason === 'no-pay') return { text: 'Add your normal paycheck in Settings to see your debt-free date', soft: true };
-    return { text: 'Every payday moves you closer', soft: true };
+    if (p.debtFree) return { label: 'Debt-free target', value: D.fmtMonthYear(p.debtFree), cls: 'is-amber' };
+    if (p.reason === 'no-pay') return { label: 'Debt-free target', value: 'Add your paycheck in Settings', cls: 'is-soft' };
+    return { label: 'Debt-free target', value: 'Every payday moves you closer', cls: 'is-soft' };
   }
-
-  function savedLineHTML(s) {
-    if (s.stage === 4) return '<b>' + esc(money(s.savings)) + '</b> saved';
-    return '<b>' + esc(money(s.jar.amount)) + '</b> of ' + esc(money(s.jar.target)) + (s.stage === 1 ? ' cushion' : ' safety net');
+  function kvHTML(label, value, cls) {
+    return '<div class="kv"><span>' + esc(label) + '</span><b class="' + (cls || '') + '">' + esc(value) + '</b></div>';
   }
 
   function progressCardHTML(s) {
-    const g = goalLine(s);
-    return '<section class="card progress-card" role="button" tabindex="0" data-action="go" data-to="voyage" aria-label="Your progress. Open your voyage.">' +
-      V.miniRoute(s.voyage) +
-      '<div class="progress-row"><div class="progress-jar">' + V.jar(s.jar, { size: 'small' }) + '</div>' +
-      '<div class="progress-text"><div class="stage-line">' + stageLineHTML(s) + '</div>' +
-      '<div class="goal-line' + (g.soft ? ' is-soft' : '') + '">' + esc(g.text) + '</div>' +
-      '<div class="saved-line">' + savedLineHTML(s) + '</div></div></div>' +
-      '<div class="more" aria-hidden="true">See your voyage ›</div></section>';
+    const t = targetKV(s);
+    const saved = s.stage === 4 ? money(s.savings) : money(s.jar.amount) + ' / ' + money(s.jar.target);
+    return '<section class="card progress-card" role="button" tabindex="0" data-action="go" data-to="voyage" aria-label="Your progress. Open Progress.">' +
+      '<div class="card-head"><h2 class="card-title">Progress · ' + esc(stageLabel(s)) + '</h2><span class="card-count">' + esc(s.stageName) + '</span></div>' +
+      V.stageBar(s.stageInfo) +
+      '<div class="mini-chart">' + V.chart(s.series, { compact: true }) + '</div>' +
+      '<div class="legend" aria-hidden="true"><span class="lg-debt">━ Debt</span><span class="lg-sav">━ Savings</span></div>' +
+      kvHTML(t.label, t.value, t.cls) + kvHTML(s.stage === 1 ? 'Starter cushion' : 'Saved', saved, 'is-green') +
+      '<div class="more" aria-hidden="true">Open progress ›</div></section>';
   }
 
   // ================================================================== PAYDAY FLOW (§6.3)
@@ -864,11 +907,11 @@
     return paydayC();
   }
 
-  function flowTop(title, back) {
+  function flowTop(title, back, right) {
     return '<div class="flow-top">' +
       (back ? '<button type="button" class="icon-btn" data-action="flowBack" aria-label="Back">' + ICON.back + '</button>'
         : '<button type="button" class="icon-btn" data-action="flowClose" aria-label="Close">' + ICON.x + '</button>') +
-      '<span class="flow-title">' + esc(title) + '</span></div>';
+      '<span class="flow-title">' + esc(title) + '</span>' + (right ? '<span class="flow-right">' + esc(right) + '</span>' : '') + '</div>';
   }
 
   function paydayA() {
@@ -916,22 +959,23 @@
     const complete = E.isComplete(pd);
     const hasSpend = (plan.items || []).some(function (it) { return it.kind === 'spend' && it.amount > 0; });
     const c = doneCount(pd);
-    let h = flowTop('Your payday plan', false) +
+    let h = flowTop('Payday', false, D.fmtShort(pd.date) + ' → next ~' + D.fmtShort(pd.nextDate)) +
+      '<section class="card quote" aria-label="' + esc(money(pd.amount) + ' on ' + fdate(pd.date) + ', next payday around ' + fdate(pd.nextDate)) + '">' +
+      '<h2 class="lbl">Hit your bank</h2><p class="q-big">' + quoteHTML(pd.amount) + '</p>' + V.splitBar(plan, money) + '</section>' +
       '<div class="callout callout-' + status + '" role="status"><p>' + esc(plan.headline) + '</p>' +
       (plan.note ? '<p class="note">' + esc(plan.note) + '</p>' : '') + '</div>' +
-      '<p class="plan-meta">' + esc(money(pd.amount) + ' on ' + fdate(pd.date) + ' · next payday around ' + fdate(pd.nextDate)) + '</p>' +
-      '<section class="card">' + V.splitBar(plan, money) +
-      '<div class="card-head" style="margin-top:18px"><h2 class="card-title">Your to-do list</h2><span class="card-count">' + c.done + ' of ' + c.total + ' done</span></div>' +
+      '<section class="card">' +
+      '<div class="card-head"><h2 class="card-title">Your to-do list</h2><span class="card-count">' + c.done + '/' + c.total + ' done</span></div>' +
       checklistHTML(pd) +
       '<div class="links">' + (isLatest ? '<button type="button" class="link" data-action="fixPayday" data-id="' + esc(pd.id) + '">Fix amount</button>' : '') +
       '<button type="button" class="link link-muted" data-action="undoPayday" data-id="' + esc(pd.id) + '">Undo payday</button></div></section>';
     if (hasSpend && !state.meta.tips.spendingCard) {
-      h += '<div class="tip"><span class="tip-emoji" aria-hidden="true">💡</span><div class="tip-body">' +
+      h += '<div class="tip"><span class="lbl">Tip</span><div class="tip-body">' +
         'Keep your spending money on its own card or account, so your bank app shows exactly what\'s left.' +
         '<br><button type="button" class="btn btn-soft btn-small" data-action="tipDone">Got it</button></div></div>';
     }
     if (complete && c.total > 0) {
-      h += '<div class="cheer" role="status"><p class="cheer-big">All done! Nice work.</p><p class="cheer-small">' + esc(streakText(E.streak(state))) + '</p></div>';
+      h += '<div class="cheer" role="status"><p class="cheer-big">All done. Nice work.</p><p class="cheer-small">' + esc(streakText(E.streak(state))) + '</p></div>';
     }
     h += '<button type="button" class="btn btn-primary" data-action="flowClose">' + (complete ? 'Done' : 'Done for now') + '</button>';
     return h;
@@ -942,30 +986,35 @@
   function renderVoyage() {
     const s = summary();
     const p = s.projection || {};
-    let title = 'Your voyage', sub = '';
-    if (s.stage === 4) title = 'You made it to Safe Harbor ⚓';
-    else if (p.alreadyDebtFree && s.debts.length) title = 'You\'re debt-free! 🎉';
-    else if (p.debtFree && !p.alreadyDebtFree) title = 'Debt-free by ' + D.fmtMonthYear(p.debtFree);
-    if (s.stage !== 4 && p.safeHarbor) sub = 'Safe Harbor by ' + D.fmtMonthYear(p.safeHarbor);
-    else if (s.stage !== 4 && p.reason === 'no-pay') sub = 'Add your normal paycheck in Settings to see dates.';
+    const rows = [];
+    if (s.stage === 4) rows.push(['Safety net', 'Full ✓', 'is-good']);
+    else {
+      if (p.alreadyDebtFree && s.debts.length) rows.push(['Debt', 'Paid off ✓', 'is-good']);
+      else if (p.debtFree && !p.alreadyDebtFree) rows.push(['Debt-free target', D.fmtMonthYear(p.debtFree), 'is-amber']);
+      if (p.safeHarbor) rows.push(['Safe Harbor target', D.fmtMonthYear(p.safeHarbor), 'is-amber']);
+      if (!rows.length) rows.push(['Targets', p.reason === 'no-pay' ? 'Add your normal paycheck in Settings' : 'Every payday moves you closer', 'is-soft']);
+    }
+    const jarSub = s.stage === 1 ? 'For surprises'
+      : s.stage === 2 ? 'Keeps growing while you crush debt'
+        : plural(state.settings.safetyMonths, 'month') + ' of bills and spending';
 
-    const jarLine = money(s.jar.amount) + ' of ' + money(s.jar.target);
-    const jarSub = s.stage === 1 ? 'Starter cushion — for surprises'
-      : s.stage === 2 ? 'Safety net — keeps growing while you crush debt'
-        : 'Safety net — ' + plural(state.settings.safetyMonths, 'month') + ' of bills and spending';
-
-    let h = '<header class="voy-head"><h1 class="page-title">' + esc(title) + '</h1>' + (sub ? '<p class="voy-sub">' + esc(sub) + '</p>' : '') + '</header>' +
-      '<section class="card route-card" aria-label="Your route"><div id="route-slot"></div></section>' +
-      '<section class="card" aria-label="Your plan">' + V.stagePath(s.stage) + '</section>' +
-      '<section class="card jar-wrap" aria-label="Your savings">' + V.jar(s.jar, { size: 'large' }) +
-      '<p class="jar-amount">' + esc(jarLine) + '</p><p class="jar-sub">' + esc(jarSub) + '</p></section>';
+    let h = headHTML('Progress') +
+      '<section class="card targets" aria-label="Your targets">' + rows.map(function (r) { return kvHTML(r[0], r[1], r[2]); }).join('') + '</section>' +
+      '<section class="card chart-card" aria-labelledby="ch-t"><div class="card-head"><h2 class="card-title" id="ch-t">Debt vs savings</h2>' +
+      '<span class="card-count legend" aria-hidden="true"><span class="lg-debt">━ Debt</span><span class="lg-sav">━ Savings</span></span></div>' +
+      '<div id="chart-slot"></div><p class="small-note">Solid = so far · dotted = where you\'re headed</p></section>' +
+      '<section class="card" aria-label="Your plan"><div class="card-head"><h2 class="card-title">The plan · ' + esc(stageLabel(s)) + '</h2>' +
+      '<span class="card-count">' + esc(s.stageName) + '</span></div>' + V.stageBar(s.stageInfo) + '</section>' +
+      '<section class="card" aria-label="Your savings"><div class="card-head"><h2 class="card-title">' + (s.stage === 1 ? 'Starter cushion' : 'Safety net') + '</h2>' +
+      '<span class="card-count">' + esc(jarSub) + '</span></div>' + V.meter(s.jar, money, { cushion: s.stage === 1 ? 0 : s.cushion }) + '</section>';
 
     if (s.debts.length) {
-      h += '<h2 class="section-title">Your debts</h2>' + V.debtBars(s.debts, money);
+      h += '<section class="card" aria-label="Your debts"><div class="card-head"><h2 class="card-title">Your debts</h2>' +
+        '<span class="card-count">Total ' + esc(money(s.totalDebtNow)) + '</span></div>' + V.debtTable(s.debts, money) + '</section>';
     }
     if (s.streak > 0) {
-      h += '<section class="card streak" style="margin-top:16px"><span class="star" aria-hidden="true">⭐</span><span>' +
-        esc(s.streak === 1 ? '1 payday all ticked off' : s.streak + ' paydays in a row, all ticked off') + '</span></section>';
+      h += '<section class="card streak"><span class="lbl">Streak</span><b>' +
+        esc(s.streak === 1 ? '1 payday all done' : s.streak + ' paydays in a row, all done') + '</b></section>';
     }
     h += '<h2 class="section-title">Logbook</h2>';
     if (!state.paydays.length) {
@@ -975,19 +1024,20 @@
         const c = doneCount(pd);
         const all = c.done === c.total;
         return '<li><button type="button" class="log-row" data-action="logOpen" data-id="' + esc(pd.id) + '">' +
-          '<span class="list-main"><span class="log-date">' + esc(fdate(pd.date) + ' · ' + money(pd.amount)) + '</span>' +
-          '<span class="log-sub' + (all ? ' is-done' : '') + '">' + (all ? '✓ ' : '') + c.done + ' of ' + c.total + ' done</span></span>' +
+          '<span class="log-date">' + esc(D.fmtShort(pd.date) + (pd.date.slice(0, 4) !== today().slice(0, 4) ? ' ' + pd.date.slice(0, 4) : '')) + '</span>' +
+          '<span class="log-amt">' + esc(fig(pd.amount)) + '</span>' +
+          '<span class="log-sub' + (all ? ' is-done' : '') + '">' + (all ? '✓ ' : '') + c.done + '/' + c.total + '</span>' +
           '<span class="chev" aria-hidden="true">›</span></button></li>';
       }).join('') + '</ul></section>';
     }
     return h;
   }
 
-  function fillRoute() {
-    const slot = $('route-slot');
+  function fillChart() {
+    const slot = $('chart-slot');
     if (!slot) return;
     const w = Math.round(slot.clientWidth) || 340;
-    slot.innerHTML = V.routeMap(summary().voyage, { width: Math.max(280, w) });
+    slot.innerHTML = V.chart(summary().series, { width: Math.max(280, w), height: w > 520 ? 240 : 200 });
   }
 
   // ================================================================== MONEY (§10.9)
@@ -1010,40 +1060,51 @@
   }
   function leftWords(n) { return n < 0 ? money(-n) + ' over' : money(n) + ' left'; }
 
-  // Today (compact) and Money (big): what's left to spend until payday.
+  // Today and Money: what's left to spend until payday, shown like a stock quote.
   function spendCardHTML(s, big) {
     const sp = s.spending;
+    const buttons = '<div class="btn-row spend-actions"><button type="button" class="btn btn-primary" data-action="logPurchase">+ Log purchase</button>' +
+      '<button type="button" class="btn btn-soft" data-action="afford">Can I afford it?</button></div>';
     if (!sp.started) {
       if (big) {
-        return '<section class="card spend-card" aria-labelledby="spend-t">' +
-          '<h2 class="spend-label" id="spend-t">Left to spend</h2>' +
-          '<p class="spend-intro">Log what you buy, and Harbor shows what\'s left to spend until payday.</p>' +
-          '<div class="btn-row spend-actions"><button type="button" class="btn btn-primary" data-action="logPurchase">＋ Log a purchase</button>' +
-          '<button type="button" class="btn btn-soft" data-action="afford">Can I afford it?</button></div></section>';
+        return '<section class="card spend-card quote" aria-labelledby="spend-t">' +
+          '<h2 class="lbl spend-label" id="spend-t">Left to spend</h2>' +
+          '<p class="spend-intro">Log what you buy, and Harbor shows what\'s left to spend until payday.</p>' + buttons + '</section>';
       }
       return '<section class="card spend-invite" aria-label="Left to spend">' +
-        '<p class="invite-text">💳 Want to see what\'s left to spend? <span class="invite-sub">Log what you buy.</span></p>' +
-        '<button type="button" class="btn btn-soft btn-small" data-action="logPurchase">Log a purchase</button></section>';
+        '<p class="invite-text"><span class="lbl">Left to spend</span>See what\'s left until payday. <span class="invite-sub">Log what you buy.</span></p>' +
+        '<button type="button" class="btn btn-soft btn-small" data-action="logPurchase">+ Log purchase</button></section>';
     }
     // Spent before the first payday was logged: it comes out of that payday's spending money.
     const early = !sp.until && sp.left < 0;
     const label = early ? 'Spent so far' : 'Left to spend';
     const amount = early ? -sp.left : Math.max(0, sp.left);
-    let sub = sp.sub || '';
+    const todayTxt = sp.spentToday > 0
+      ? '<span class="dn">▼ ' + esc(money(sp.spentToday)) + ' today</span>'
+      : '<span class="mut">No spending today</span>';
+    let per = '';
+    if (sp.until && sp.daysLeft > 0 && sp.left > 0 && sp.perDay != null) {
+      const r = function (x) { return money(x >= 1 ? Math.round(x) : E.round2(x)); };
+      per = sp.homeDays > 0 && sp.boatDays > 0 && sp.perHome > 0
+        ? r(sp.perHome) + ' home · ' + r(sp.perBoat) + ' boat / day'
+        : r(sp.perDay) + ' / day · ' + plural(sp.daysLeft, 'day');
+    }
+    let sub = '';
     if (!sp.until) sub = early ? 'It comes out of your first payday\'s spending money.' : 'When your pay lands, your spending money is added.';
-    let h = '<section class="card spend-card' + (big ? ' is-big' : '') + '" aria-labelledby="spend-t">' +
-      '<h2 class="spend-label" id="spend-t">' + label + '</h2>' +
-      '<p class="spend-amt">' + esc(money(amount)) + '</p>' +
+    else if (!per) sub = sp.sub || '';
+    else if (big) sub = 'Until payday around ' + fdate(sp.until);
+    let h = '<section class="card spend-card quote' + (big ? ' is-big' : '') + '" aria-labelledby="spend-t">' +
+      '<h2 class="lbl spend-label" id="spend-t">' + label + '</h2>' +
+      '<p class="spend-amt q-big">' + quoteHTML(amount) + '</p>' +
+      '<div class="q-row">' + todayTxt + (per ? '<span>' + esc(per) + '</span>' : '') + '</div>' +
       (sub ? '<p class="spend-sub">' + esc(sub) + '</p>' : '');
     if (sp.status === 'over' && sp.until) h += '<p class="spend-over">' + esc(sp.overText) + '</p>';
     if (big && sp.carried != null && Math.abs(sp.carried) >= 0.5 && sp.until) {
       h += '<p class="spend-carried">' + (sp.carried > 0
-        ? 'Includes ' + esc(money(sp.carried)) + ' left over from last time 👍'
+        ? 'Includes ' + esc(money(sp.carried)) + ' left over from last time'
         : 'After ' + esc(money(-sp.carried)) + ' you went over last time') + '</p>';
     }
-    h += '<div class="btn-row spend-actions"><button type="button" class="btn ' + (big ? 'btn-primary' : 'btn-soft') + '" data-action="logPurchase">＋ Log a purchase</button>' +
-      '<button type="button" class="btn ' + (big ? 'btn-soft' : 'btn-text') + '" data-action="afford">Can I afford it?</button></div></section>';
-    return h;
+    return h + buttons + '</section>';
   }
 
   function dayLabel(iso) {
@@ -1056,7 +1117,7 @@
   const BUYS_SHORT = 8;
   function purchasesHTML(sp) {
     if (!sp.recent.length) {
-      return '<p class="empty-note">Nothing logged yet. After you buy something, tap ＋ Log a purchase — it takes about 10 seconds.</p>';
+      return '<p class="empty-note">Nothing logged yet. After you buy something, tap + Log purchase — it takes about 10 seconds.</p>';
     }
     const groups = [];
     const list = ui.allBuys ? sp.recent : sp.recent.slice(0, BUYS_SHORT);
@@ -1067,14 +1128,14 @@
       g.list.push(p);
     });
     let h = '<section class="card card-flush buys" aria-label="Recent purchases">' + groups.map(function (g) {
-      return '<h3 class="buy-day"><span>' + esc(dayLabel(g.date)) + '</span><span>' + esc(money(g.total)) + '</span></h3>' +
+      return '<h3 class="buy-day"><span>' + esc(dayLabel(g.date)) + '</span><span>−' + esc(fig(g.total)) + '</span></h3>' +
         '<ul class="buy-list">' + g.list.map(function (p) {
-          const hint = p.label + (p.paidWith !== 'spending' ? ' · ' + (isDebtPay(p.paidWith) ? '💳 ' : '') + p.paidWithName : '');
+          const via = p.paidWith !== 'spending' ? (isDebtPay(p.paidWith) ? 'On ' : 'From ') + p.paidWithName : '';
           return '<li><button type="button" class="buy-row" data-action="editPurchase" data-id="' + esc(p.id) + '">' +
-            '<span class="buy-emoji" aria-hidden="true">' + p.emoji + '</span>' +
-            '<span class="list-main"><span class="buy-name">' + esc(p.where) + (p.what ? '<span class="buy-what"> — ' + esc(p.what) + '</span>' : '') + '</span>' +
-            '<span class="buy-sub">' + esc(hint) + '</span></span>' +
-            '<span class="buy-amt">' + esc(money(p.amount)) + '</span></button></li>';
+            '<span class="list-main"><span class="buy-name">' + esc(p.where || p.label) + (p.what ? '<span class="buy-what"> — ' + esc(p.what) + '</span>' : '') + '</span>' +
+            (via ? '<span class="buy-sub">' + esc(via) + '</span>' : '') + '</span>' +
+            '<span class="buy-code" title="' + esc(p.label) + '">' + esc(CAT_CODE[p.category] || 'OTHR') + '</span>' +
+            '<span class="buy-amt">−' + esc(fig(p.amount)) + '</span></button></li>';
         }).join('') + '</ul>';
     }).join('') + '</section>';
     if (list.length < sp.recent.length) {
@@ -1110,7 +1171,7 @@
         return { name: esc(x.where), total: x.total, count: x.count };
       }), 'is-places', 'Top places') +
         '<h3 class="mini-title">By kind</h3>' + barsHTML(cur.summary.byCategory.map(function (x) {
-        return { name: '<span aria-hidden="true">' + x.emoji + '</span> ' + esc(x.label), total: x.total, count: 0 };
+        return { name: esc(x.label), total: x.total, count: 0 };
       }), 'is-cats', 'By kind');
     }
     return h + '</section>';
@@ -1129,10 +1190,10 @@
         cls = 'is-amt';
       }
       return row('account', a.name, value, { id: a.id, small: small, valueCls: cls });
-    }).join('') + row('addAccount', '＋ Add an account', null, { cls: 'add', noChev: true }) + '</div>';
+    }).join('') + row('addAccount', '+ Add an account', null, { cls: 'add', noChev: true }) + '</div>';
     if (s.debts.length) {
       h += '<h2 class="section-title">What you owe</h2><div class="card group">' + s.debts.map(function (d) {
-        return row('owe', d.name, d.open ? money(d.balance) + ' left' : 'Paid off 🎉', { id: d.id, valueCls: d.open ? 'is-amt' : '' });
+        return row('owe', d.name, d.open ? money(d.balance) + ' left' : 'Paid off ✓', { id: d.id, valueCls: d.open ? 'is-amt' : 'is-good' });
       }).join('') + '</div>';
     }
     return h;
@@ -1140,7 +1201,7 @@
 
   function renderMoney() {
     const s = summary();
-    return '<h1 class="page-title">Money</h1>' + spendCardHTML(s, true) +
+    return headHTML('Money') + spendCardHTML(s, true) +
       '<h2 class="section-title">Recent purchases</h2>' + purchasesHTML(s.spending) +
       whereHTML(s) + accountRowsHTML(s);
   }
@@ -1153,7 +1214,7 @@
       .sort(function (a, b) { return (a.kind === 'spending' ? 0 : 1) - (b.kind === 'spending' ? 0 : 1); })
       .map(function (a) { return { v: a.id, label: a.name }; });
     s.debts.forEach(function (d) {
-      if (d.open || (keep && keep.paidWith === 'debt:' + d.id)) opts.push({ v: 'debt:' + d.id, label: '💳 ' + d.name, debt: true });
+      if (d.open || (keep && keep.paidWith === 'debt:' + d.id)) opts.push({ v: 'debt:' + d.id, label: d.name, debt: true });
     });
     if (keep && !opts.some(function (o) { return o.v === keep.paidWith; })) {
       opts.push({ v: keep.paidWith, label: isDebtPay(keep.paidWith) ? 'A card you removed' : 'An account you removed' });
@@ -1184,7 +1245,7 @@
       '<label class="field"><span class="field-label">What? <span class="opt">(optional)</span></span><input class="input" id="pu-what" maxlength="80" autocomplete="off" enterkeyhint="done" placeholder="e.g. lunch" value="' + esc(cur.what) + '"></label>' +
       '<div class="field"><span class="field-label" id="pu-cat-l">Kind</span><div class="cat-grid" role="group" aria-labelledby="pu-cat-l">' + CATS.map(function (c) {
         return '<button type="button" class="cat' + (cat === c.key ? ' is-on' : '') + '" data-la="cat" data-v="' + c.key + '" aria-pressed="' + (cat === c.key) + '">' +
-          '<span class="cat-emoji" aria-hidden="true">' + c.emoji + '</span><span class="cat-label">' + esc(c.label) + '</span></button>';
+          '<span class="cat-code" aria-hidden="true">' + esc(CAT_CODE[c.key] || '') + '</span><span class="cat-label">' + esc(c.label) + '</span></button>';
       }).join('') + '</div></div>' +
       '<div class="field"><span class="field-label" id="pu-pw-l">Paid with</span><div class="chips pw-chips" role="group" aria-labelledby="pu-pw-l">' + opts.map(function (x) {
         return '<button type="button" class="chip' + (pw === x.v ? ' is-on' : '') + '" data-la="pw" data-v="' + esc(x.v) + '" aria-pressed="' + (pw === x.v) + '">' +
@@ -1282,14 +1343,14 @@
       return '<div class="verdict verdict-idle"><p class="verdict-sub">' + esc(line) + '</p></div>';
     }
     const a = E.afford(state, today(), price, { money: money });
-    const emoji = { ok: '✅', tight: '🤔', wait: '✋' }[a.verdict] || '🤔';
+    const tagTxt = { ok: 'Fits', tight: 'Tight', wait: 'Wait' }[a.verdict] || 'Tight';
     const tile = function (label, per) {
       const pd = perText(per, sp);
       const amt = per.left < 0 ? money(-per.left) + ' over' : money(per.left);
       return '<div class="tile"><span>' + label + '</span><b>' + esc(amt) + '</b>' + (pd ? '<small>' + esc(pd) + '</small>' : '') + '</div>';
     };
     return '<div class="verdict verdict-' + a.verdict + '">' +
-      '<div class="verdict-head"><span class="verdict-emoji" aria-hidden="true">' + emoji + '</span><p class="verdict-text">' + esc(a.headline) + '</p></div>' +
+      '<div class="verdict-head"><span class="verdict-tag">' + tagTxt + '</span><p class="verdict-text">' + esc(a.headline) + '</p></div>' +
       (a.sub && !a.started ? '<p class="verdict-sub">' + esc(a.sub) + '</p>' : '') +
       '<div class="tiles verdict-tiles">' + tile('Left now', a.before) + '<span class="arrow" aria-hidden="true">→</span>' + tile('Left after', a.after) + '</div></div>';
   }
@@ -1425,7 +1486,7 @@
     const byId = {};
     sum.debts.forEach(function (d) { byId[d.id] = d; });
 
-    let h = '<h1 class="page-title">Settings</h1>';
+    let h = headHTML('Settings');
 
     h += '<h2 class="section-title">Rotation</h2><div class="card group">' +
       row('rotation', 'Boat date', s.boatDate ? fdate(s.boatDate) : 'Not set', { small: 'A day you get on (or got on) the boat' }) +
@@ -1440,17 +1501,17 @@
       state.bills.map(function (b) {
         return row('editBill', b.name, money(b.amount), { id: b.id, small: billWhen(b) });
       }).join('') +
-      row('addBill', '＋ Add a bill', null, { cls: 'add', noChev: true }) + '</div>';
+      row('addBill', '+ Add a bill', null, { cls: 'add', noChev: true }) + '</div>';
 
     h += '<h2 class="section-title">Debts</h2><div class="card group">' +
       state.debts.map(function (d) {
         const r = byId[d.id];
         const open = r ? r.open : d.balance > 0;
-        return row('editDebt', d.name, open ? money(r ? r.balance : d.balance) + ' left' : 'Paid off 🎉', {
+        return row('editDebt', d.name, open ? money(r ? r.balance : d.balance) + ' left' : 'Paid off ✓', {
           id: d.id, small: money(d.minPayment) + ' a month' + (d.rate != null ? ' · ' + d.rate + '% interest' : ''),
         });
       }).join('') +
-      row('addDebt', '＋ Add a debt', null, { cls: 'add', noChev: true }) + '</div>';
+      row('addDebt', '+ Add a debt', null, { cls: 'add', noChev: true }) + '</div>';
 
     h += '<h2 class="section-title">Savings</h2><div class="card group">' +
       row('editSavings', 'What\'s in savings now', money(sum.savings)) + '</div>';
@@ -1480,19 +1541,19 @@
 
     const last = state.meta.lastBackupAt ? fdate(state.meta.lastBackupAt) : 'never';
     h += '<h2 class="section-title">Your data</h2><div class="card group">' +
-      row('backup', '💾 Back up now', 'Last: ' + last) +
-      row('restore', '📂 Restore from a backup', null) +
+      row('backup', 'Back up now', 'Last: ' + last) +
+      row('restore', 'Restore from a backup', null) +
       '<div class="group-pad"><ul class="warn-list">' +
-      warn('🔒', 'Your money info lives only on this device — nothing is sent anywhere.') +
-      warn('📲', 'Open Harbor from its Home Screen icon. In a Safari tab, Safari can erase it after about a week of not opening it.') +
-      warn('🗑️', 'Deleting the Harbor icon from your Home Screen deletes its data.') +
-      warn('🧹', 'Clearing Safari\'s history and website data can wipe it.') +
-      warn('📱', 'Your iPad and iPhone don\'t sync. Pick one, or move your data with a backup file.') +
-      warn('☁️', 'Keep a backup in iCloud Drive or Files — we\'ll remind you once a month.') +
+      warn('■', 'Your money info lives only on this device — nothing is sent anywhere.') +
+      warn('■', 'Open Harbor from its Home Screen icon. In a Safari tab, Safari can erase it after about a week of not opening it.') +
+      warn('■', 'Deleting the Harbor icon from your Home Screen deletes its data.') +
+      warn('■', 'Clearing Safari\'s history and website data can wipe it.') +
+      warn('■', 'Your iPad and iPhone don\'t sync. Pick one, or move your data with a backup file.') +
+      warn('■', 'Keep a backup in iCloud Drive or Files — we\'ll remind you once a month.') +
       '</ul></div>' +
       row('startOver', 'Start over', null, { cls: 'danger', noChev: true }) + '</div>';
 
-    h += '<p class="footer">Harbor · works offline · your data stays on this device<br>Version ' + esc(E.version) + '</p>';
+    h += '<p class="footer">Harbor Terminal · works offline · your data stays on this device<br>Version ' + esc(E.version) + '</p>';
     return h;
   }
 
@@ -1517,7 +1578,7 @@
     renderTabs();
     document.body.classList.toggle('no-tabs', ui.screen === 'setup' || ui.screen === 'payday');
     document.body.dataset.screen = ui.screen;
-    if (ui.screen === 'voyage') fillRoute();
+    if (ui.screen === 'voyage') fillChart();
     refreshLayers();
     if (fk) {
       const scope = inLayer && inLayer.isConnected ? inLayer : (inLayer ? null : $app);
@@ -1531,11 +1592,11 @@
     const show = state.setupDone && (ui.screen === 'today' || ui.screen === 'money' || ui.screen === 'voyage' || ui.screen === 'settings');
     $tabs.hidden = !show;
     if (!show) { $tabs.innerHTML = ''; return; }
-    const tabs = [['today', 'Today'], ['money', 'Money'], ['voyage', 'Voyage'], ['settings', 'Settings']];
-    $tabs.innerHTML = '<div class="tabs-inner">' + tabs.map(function (t) {
+    const tabs = [['today', 'Today'], ['money', 'Money'], ['voyage', 'Progress'], ['settings', 'Settings']];
+    $tabs.innerHTML = '<div class="tabs-inner">' + tabs.map(function (t, i) {
       const on = ui.screen === t[0];
       return '<button type="button" class="tab" data-action="go" data-to="' + t[0] + '"' + (on ? ' aria-current="page"' : '') + '>' +
-        ICON[t[0]] + '<span>' + t[1] + '</span></button>';
+        '<small aria-hidden="true">F' + (i + 1) + '</small><span>' + t[1] + '</span></button>';
     }).join('') + '</div>';
   }
 
@@ -1688,17 +1749,17 @@
     if (!m) return;
     E.act.markCelebrated(state, [m.key], today());
     save();
-    openLayer('<div class="celebrate"><div class="big-emoji" aria-hidden="true">' + m.emoji + '</div>' +
+    openLayer('<div class="celebrate flashcard"><span class="lbl">Milestone</span>' +
       '<h2>' + esc(m.title) + '</h2><p>' + esc(m.message) + '</p>' +
       '<button type="button" class="btn btn-primary" data-la="close">Keep going</button></div>',
-    { center: true, focus: 'box', onClose: function () { render(); } });
-    V.confetti();
+    { center: true, focus: 'box', cls: 'is-flash', onClose: function () { render(); } });
+    V.flash();
   }
 
   function recapStats(r) {
     const stats = [];
-    if (r.debtPaid > 0) stats.push('<div class="recap-stat"><b>' + esc(money(r.debtPaid)) + '</b><span>paid on debts</span></div>');
-    if (r.saved > 0) stats.push('<div class="recap-stat"><b>' + esc(money(r.saved)) + '</b><span>saved</span></div>');
+    if (r.debtPaid > 0) stats.push('<div class="recap-stat"><span>Debt paid</span><b class="is-green">' + esc(money(r.debtPaid)) + '</b></div>');
+    if (r.saved > 0) stats.push('<div class="recap-stat"><span>Saved</span><b class="is-green">' + esc(money(r.saved)) + '</b></div>');
     if (!stats.length) return r.paydays > 0 ? '<p class="recap-list" style="margin-top:14px">You kept your bills covered. That counts.</p>' : '<div style="height:14px"></div>';
     return '<div class="recap-stats' + (stats.length === 1 ? ' one' : '') + '">' + stats.join('') + '</div>';
   }
@@ -1710,19 +1771,19 @@
     const top = sp.byPlace.slice(0, 2).map(function (x) {
       return esc(x.where) + ' ' + esc(money(x.total)) + (x.count > 1 ? ' (' + x.count + '×)' : '');
     }).join(', ');
-    return '<p class="recap-list">🧾 Spent: <b>' + esc(money(sp.total)) + '</b>' + (top ? ' — top: ' + top : '') + '</p>' +
+    return '<p class="recap-list">Spent: <b>' + esc(money(sp.total)) + '</b>' + (top ? ' — top: ' + top : '') + '</p>' +
       (r.compare && r.compare.text ? '<p class="recap-list recap-compare">' + esc(r.compare.text) + '</p>' : '');
   }
 
   function showRecap(r) {
     const home = r.where === 'home';   // a home stretch just ended: back out to sea
     const paid = r.paidOff && r.paidOff.length
-      ? '<p class="recap-list">🏝️ Paid off: <b>' + esc(r.paidOff.join(', ')) + '</b></p>' : '';
+      ? '<p class="recap-list">Paid off: <b class="is-green">' + esc(r.paidOff.join(', ')) + '</b></p>' : '';
     const steps = r.total > 0 ? '<p class="recap-list">✓ You ticked ' + r.ticked + ' of ' + plural(r.total, 'step') +
       ' on ' + plural(r.paydays, 'payday') + '.</p>' : '';
-    openLayer('<div class="celebrate"><div class="big-emoji" aria-hidden="true">' + (home ? '🚢' : '🏠') + '</div>' +
-      '<h2>' + esc(r.title || (home ? 'Back out to sea ⚓' : 'Welcome home!')) + '</h2>' +
-      '<p style="margin-bottom:0">' + (home ? 'While you were home' : 'While you were out') + ' <span class="nowrap">(' + esc(D.fmtRange(r.start, r.end)) + '):</span></p>' +
+    openLayer('<div class="celebrate recap"><span class="lbl">Recap · ' + (home ? 'Home stretch' : 'Boat stretch') + ' · <span class="nowrap">' + esc(D.fmtRange(r.start, r.end)) + '</span></span>' +
+      '<h2>' + esc(r.title || (home ? 'Back out to sea' : 'Welcome home!')) + '</h2>' +
+      '<p style="margin-bottom:0">' + (home ? 'While you were home:' : 'While you were out:') + '</p>' +
       recapStats(r) +
       paid + steps + recapSpentHTML(r) +
       '<button type="button" class="btn btn-primary" data-la="close">Nice!</button></div>',
@@ -2008,9 +2069,9 @@
     const html = sheetHead('Spending money', domId('sp')) +
       '<p class="sheet-lead">For everything that isn\'t a bill: groceries, gas, going out, shopping.</p>' +
       '<form data-lsubmit novalidate autocomplete="off">' +
-      '<label class="field"><span class="field-label">🏠 Home stretch (' + s.offDays + ' days)</span>' + moneyField('sp-home', s.homeSpend, { placeholder: sug.ok ? numStr(sug.home) : '0', enter: 'next' }) + '</label>' +
-      '<label class="field"><span class="field-label">🚢 Boat stretch (' + s.onDays + ' days)</span>' + moneyField('sp-boat', s.boatSpend, { placeholder: sug.ok ? numStr(sug.boat) : '0' }) + '</label>' +
-      (sug.ok ? '<button type="button" class="btn btn-soft" data-la="suggest" style="margin-bottom:10px">✨ Suggest for me</button>'
+      '<label class="field"><span class="field-label">Home stretch (' + s.offDays + ' days)</span>' + moneyField('sp-home', s.homeSpend, { placeholder: sug.ok ? numStr(sug.home) : '0', enter: 'next' }) + '</label>' +
+      '<label class="field"><span class="field-label">Boat stretch (' + s.onDays + ' days)</span>' + moneyField('sp-boat', s.boatSpend, { placeholder: sug.ok ? numStr(sug.boat) : '0' }) + '</label>' +
+      (sug.ok ? '<button type="button" class="btn btn-soft" data-la="suggest" style="margin-bottom:10px">Suggest for me</button>'
         : '<p class="field-help" style="margin-bottom:14px">' + (s.payAmount > 0 ? 'On paper your bills use up your paycheck. Set what you really need — we\'ll work with it.' : 'Add your normal paycheck and we can suggest amounts.') + '</p>') +
       '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div></form>';
     openLayer(html, {
@@ -2257,7 +2318,7 @@
       title: 'Start over?',
       body: 'This deletes everything in Harbor on this device: your plan, paydays and progress.',
       buttons: [
-        { v: 'backup', label: '💾 Back up first', cls: 'btn-soft' },
+        { v: 'backup', label: 'Back up first', cls: 'btn-soft' },
         { v: 'go', label: 'Delete everything', cls: 'btn-danger' },
         { v: null, label: 'Cancel', cls: 'btn-text' },
       ],
@@ -2622,9 +2683,12 @@
   }
 
   let resizeTimer = 0;
+  // LIVE / OFFLINE in the header.
+  window.addEventListener('online', function () { if (!layers.length && ui.screen !== 'setup') render(); });
+  window.addEventListener('offline', function () { if (!layers.length && ui.screen !== 'setup') render(); });
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(function () { if (ui.screen === 'voyage') fillRoute(); }, 150);
+    resizeTimer = setTimeout(function () { if (ui.screen === 'voyage') fillChart(); }, 150);
   });
 
   // A new day while the app sat open: refresh everything.

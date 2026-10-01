@@ -1,12 +1,13 @@
-# ⚓ Harbor — your payday coach
+# Harbor Terminal — your payday coach
 
 Harbor tells you exactly what to do with each paycheck and shows your progress to
-**debt-free** and a **full safety net**. It's built for a 28-days-on / 14-days-home rotation.
+**debt-free** and a **full safety net**, in a dark trading-terminal look. It's built for a
+28-days-on / 14-days-home rotation.
 
 After a 5-minute setup you only ever do two things:
 
-1. **On payday:** tap **💰 I got paid**, type what hit your bank, and tick off the short to-do list.
-2. **When your schedule changes:** tap the boat banner at the top and enter your new boat date.
+1. **On payday:** tap **I GOT PAID**, type what hit your bank, and tick off the short to-do list.
+2. **When your schedule changes:** tap the ROTATION panel at the top (EDIT) and enter your new boat date.
 
 Everything else (bills, spending money, which debt to pay, savings, your debt-free date) is worked out for you.
 
@@ -48,7 +49,7 @@ Plain HTML/CSS/JavaScript: no build step, no libraries, no server.
 |---|---|
 | `index.html`, `styles.css`, `app.js` | The screens |
 | `engine.js` | All the money and rotation logic (no screen code) |
-| `visuals.js` | Route map, savings jar, debt bars, confetti |
+| `visuals.js` | Debt-vs-savings chart, stage bar, savings meter, debt table, ticker, milestone flash |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and the Home Screen icon |
 | `docs/SPEC.md` | The full design spec |
 
