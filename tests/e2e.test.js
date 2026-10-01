@@ -4,7 +4,8 @@
 // Serves the repo under /track/ (like GitHub Pages) from a tiny built-in static server,
 // then walks the whole app on an iPhone 13 and an iPad (gen 7):
 // setup → payday → ticks → recap → check-in → tight payday + undo → backup → start over →
-// restore → offline reload through the service worker. Any console error or page error fails.
+// restore → offline reload through the service worker; then the v2 money run (schema-1 restore,
+// purchases, can I afford it, balances, both recaps). Any console error or page error fails.
 // All numbers are the generic SPEC §9 examples — never real ones.
 'use strict';
 
@@ -176,6 +177,11 @@ async function runDevice(browser, srv, deviceName) {
     await page.fill('#f-sav', '200');
     await r.next();
 
+    // v2: optional checking + spending-card balances (spending card left blank here).
+    assert.match(await page.textContent('.q-title'), /checking and on your spending card/);
+    await page.fill('#f-chk', '1500');
+    await r.next();
+
     // Spending: suggestions are prefilled; set the §9 amounts ($100/day home, $10/day boat).
     assert.ok(Number(await page.inputValue('#f-home')) > 0, 'home spending is suggested');
     await page.fill('#f-home', '1400');
@@ -196,11 +202,14 @@ async function runDevice(browser, srv, deviceName) {
     assert.deepEqual(st0.debts.map((d) => [d.name, d.balance, d.minPayment, d.dueDay, d.rate]),
       [['Visa', 1200, 40, 10, 24], ['Store card', 500, 25, 18, null]]);
     assert.equal(st0.savings.amount, 200);
+    assert.equal(st0.schema, 2);
+    assert.deepEqual(st0.checkins.map((c) => c.accounts), [{ checking: 1500 }], 'setup saved the checking balance only');
     assert.deepEqual([st0.settings.boatDate, st0.settings.payAmount, st0.settings.payFreq, st0.settings.homeSpend, st0.settings.boatSpend],
       ['2026-09-08', 2000, 'biweekly', 1400, 280]);
     const banner = (await page.textContent('.banner-text')).replace(/\s+/g, ' ').trim();
     assert.equal(banner, '🚢 Day 23 of 28 · home in 6 days');
-    assert.equal(await page.$$eval('.tab', (e) => e.length), 3);
+    assert.deepEqual(await page.$$eval('.tab', (e) => e.map((x) => x.textContent.trim())), ['Today', 'Money', 'Voyage', 'Settings']);
+    assert.ok(await page.$('.spend-invite'), 'Today invites logging when nothing is logged');
     await r.noSideScroll('today after setup');
 
     // ------------------------------------------------------------ 2. first payday (Oct 1, $2,000) = P1
@@ -300,7 +309,7 @@ async function runDevice(browser, srv, deviceName) {
     await page.waitForSelector('.layer', { state: 'detached' });
     assert.equal(await page.textContent('#toast'), 'Saved.');
     const stTick = await r.state();
-    assert.equal(stTick.checkins.length, 0, 'no check-in saved without balances');
+    assert.equal(stTick.checkins.length, 1, 'no check-in saved without balances (only the one from setup)');
     assert.deepEqual(Object.keys(stTick.paydays[1].ticks), ['debt:' + stTick.debts[0].id]);
     await r.dismissPopups();
     await page.click('.tab[data-to=today]');
@@ -373,9 +382,10 @@ async function runDevice(browser, srv, deviceName) {
     await page.click('.layer button[type=submit]');
     await page.waitForSelector('.layer', { state: 'detached' });
     const st2 = await r.state();
-    assert.equal(st2.checkins.length, 2, 'the minimum change pinned a balance, then the check-in');
-    assert.equal(st2.checkins[1].debts[visaId], 600);
-    assert.equal(st2.checkins[1].savings, null, 'untouched savings field is not saved');
+    assert.equal(st2.checkins.length, 3, 'setup, the minimum change pinned a balance, then the check-in');
+    assert.equal(st2.checkins[2].debts[visaId], 600);
+    assert.equal(st2.checkins[2].savings, null, 'untouched savings field is not saved');
+    assert.deepEqual(st2.checkins[2].accounts, {}, 'untouched account fields are not saved');
 
     // ------------------------------------------------------------ 7. a paycheck that barely covers bills → kind 'tight'
     await r.at('2026-10-29');
@@ -413,7 +423,7 @@ async function runDevice(browser, srv, deviceName) {
     await download.saveAs(backupPath);
     const backupJson = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
     assert.equal(backupJson.app, 'harbor');
-    assert.equal(backupJson.schema, 1);
+    assert.equal(backupJson.schema, 2);
     assert.equal(backupJson.data.paydays.length, 2);
     assert.equal((await r.state()).meta.lastBackupAt, '2026-10-29');
     await page.waitForTimeout(300);
@@ -439,7 +449,7 @@ async function runDevice(browser, srv, deviceName) {
     const st3 = await r.state();
     assert.equal(st3.setupDone, true);
     assert.equal(st3.paydays.length, 2);
-    assert.equal(st3.checkins.length, 2);
+    assert.equal(st3.checkins.length, 3);
     await page.reload();
     await page.waitForSelector('.banner');
     assert.equal((await r.state()).paydays.length, 2, 'restored data persisted');
@@ -466,6 +476,227 @@ async function runDevice(browser, srv, deviceName) {
     }
 
     r.noErrors('on ' + deviceName);
+  } finally {
+    await ctx.close();
+    fs.rmSync(dl, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------- v2 money: accounts, spending pot, purchase log (SPEC §10)
+// Starts from a schema-1 (v1) backup, then logs, edits and deletes purchases, checks "Can I afford it?",
+// sets balances and sees both kinds of stretch recap. Generic example numbers only.
+async function runMoney(browser, srv, deviceName) {
+  const dl = fs.mkdtempSync(path.join(os.tmpdir(), 'harbor-e2e-money-'));
+  const ctx = await browser.newContext({ ...devices[deviceName], serviceWorkers: 'block' });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('console', (m) => { if (m.type() === 'error') errors.push('[console] ' + m.text()); });
+  page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message));
+  const r = makeRunner(page, srv.base, errors);
+  const toastText = async () => { await page.waitForTimeout(150); return (await page.textContent('#toast')).trim(); };
+  const closeLayer = async () => { await page.keyboard.press('Escape'); await page.waitForSelector('.layer', { state: 'detached' }); };
+  const spendAmt = () => page.textContent('.spend-card .spend-amt');
+  const submitLayer = async () => {
+    await page.click('.layer button[type=submit]');
+    await page.waitForSelector('.layer', { state: 'detached' });
+  };
+
+  try {
+    // ------------------------------------------------------------ 1. restore a schema-1 (v1) backup
+    await r.at('2026-10-01');
+    const v1 = await page.evaluate(() => {
+      const E = window.Engine;
+      const st = E.newState('2026-09-30');
+      Object.assign(st.settings, { boatDate: '2026-09-08', payAmount: 2000, payFreq: 'biweekly', homeSpend: 1400, boatSpend: 280 });
+      st.bills = [
+        { id: 'b1', name: 'Car insurance', amount: 150, freq: 'monthly', dueDay: 5, dueMonth: null },
+        { id: 'b2', name: 'Phone', amount: 80, freq: 'monthly', dueDay: 12, dueMonth: null },
+      ];
+      st.debts = [{ id: 'visa', name: 'Visa', balance: 1200, asOf: '2026-09-30', minPayment: 40, dueDay: 10, rate: 24 }];
+      st.savings = { amount: 200, asOf: '2026-09-30' };
+      st.setupDone = true;
+      st.meta.tips.spendingCard = true;
+      st.meta.tips.addToHome = true;
+      const pd = E.act.addPayday(st, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }, { d: '2026-10-01', t: 1 });
+      pd.plan.items.forEach((it) => E.act.tick(st, pd.id, it.key, true, { d: '2026-10-01', t: 2 }));
+      E.act.markAllCelebrated(st, '2026-10-01');
+      // The old (v1) shape: no accounts, no purchases, no payday.t, no check-in accounts.
+      st.schema = 1;
+      delete st.accounts; delete st.purchases; delete st.settings.homeSince;
+      st.paydays.forEach((p) => delete p.t);
+      return { app: 'harbor', schema: 1, exportedAt: '2026-10-01', data: st };
+    });
+    assert.equal(v1.schema, 1);
+    assert.equal(v1.data.accounts, undefined);
+    const v1Path = path.join(dl, 'harbor-backup-2026-10-01.json');
+    fs.writeFileSync(v1Path, JSON.stringify(v1));
+    await page.setInputFiles('#restore-file', v1Path);
+    await page.waitForSelector('.layer [data-la=pick]');
+    assert.match(await page.textContent('.layer'), /backup from Oct 1 \(1 payday\)/);
+    await page.click('.layer [data-la=pick] >> nth=0');
+    await page.waitForSelector('.banner');
+    let st = await r.state();
+    assert.equal(st.schema, 2, 'migrated to schema 2');
+    assert.deepEqual(st.accounts.map((a) => a.id), ['checking', 'spending', 'savings']);
+    assert.deepEqual(st.purchases, []);
+    assert.equal(st.paydays.length, 1);
+    assert.equal(st.debts[0].name, 'Visa');
+    assert.match(await page.textContent('.next-card'), /Next payday: around Oct 15/);
+    assert.ok(await page.$('.spend-invite'), 'not logging yet: slim invite on Today');
+    assert.equal(await page.$('.spend-card'), null);
+    await r.dismissPopups();
+
+    // ------------------------------------------------------------ 2. Money tab before logging; "Can I afford it?" verdicts
+    await page.click('.tab[data-to=money]');
+    await page.waitForSelector('.spend-card .spend-intro');
+    assert.match(await page.textContent('.group [data-action=account][data-id=checking]'), /Add balance/);
+    assert.match(await page.textContent('main'), /What you owe/);
+    await page.click('main [data-action=afford]');
+    await page.waitForSelector('.layer #af-amt');
+    const verdict = async (price) => {
+      await page.fill('#af-amt', String(price));
+      return page.$eval('#af-result .verdict', (el) => [el.className.replace(/.*verdict-/, ''), el.textContent]);
+    };
+    let v = await verdict(20);
+    assert.equal(v[0], 'ok'); assert.match(v[1], /Go for it/); assert.match(v[1], /Log your purchases for a sharper answer/);
+    v = await verdict(300);
+    assert.equal(v[0], 'tight'); assert.match(v[1], /the rest of the days get tighter/);
+    v = await verdict(600);
+    assert.equal(v[0], 'wait'); assert.match(v[1], /Maybe wait, or find a cheaper option/);
+    v = await verdict(1000);
+    assert.equal(v[0], 'wait'); assert.match(v[1], /more than you've got left \(\$950\)/);
+    assert.doesNotMatch(v[1], /should|bad|fail|irresponsible/i);
+    // "I bought it — log it" opens Log a purchase with the price filled in.
+    await page.fill('#af-amt', '38');
+    await page.click('.layer [data-la=buy]');
+    await page.waitForSelector('.layer #pu-amt');
+    assert.equal(await page.inputValue('#pu-amt'), '38');
+    await page.fill('#pu-where', 'Uber Eats');
+    await page.click('.layer .cat[data-v=delivery]');
+    assert.equal(await page.getAttribute('.layer [data-la=pw][data-v=spending]', 'aria-pressed'), 'true', 'spending card is the default');
+    await submitLayer();
+    assert.match(await toastText(), /^Logged ✓ \$912 left · about /);
+    assert.equal(await spendAmt(), '$912');
+
+    // ------------------------------------------------------------ 3. log more from Today (one on the Visa)
+    await page.click('.tab[data-to=today]');
+    await page.waitForSelector('.spend-card');
+    assert.equal(await spendAmt(), '$912', 'Today shows the same left to spend');
+    await page.click('.spend-card [data-action=logPurchase]');
+    await page.waitForSelector('.layer #pu-amt');
+    await page.fill('#pu-amt', '52');
+    await page.fill('#pu-where', 'Shell');
+    await page.click('.layer .cat[data-v=gas]');
+    await submitLayer();
+    assert.equal(await spendAmt(), '$860');
+    await page.click('.spend-card [data-action=logPurchase]');
+    await page.waitForSelector('.layer #pu-amt');
+    assert.match(await page.textContent('.layer [data-la=pw][data-v="debt:visa"]'), /Visa — adds to what you owe/);
+    await page.fill('#pu-amt', '120');
+    await page.fill('#pu-where', 'Amazon');
+    await page.fill('#pu-what', 'boots');
+    await page.click('.layer .cat[data-v=shopping]');
+    await page.click('.layer [data-la=pw][data-v="debt:visa"]');
+    assert.match(await page.textContent('#pu-pw-help'), /Adds to what you owe on Visa/);
+    await submitLayer();
+    assert.match(await toastText(), /^Logged ✓ \$740 left · .*Added to your Visa balance\.$/);
+    assert.equal(await spendAmt(), '$740');
+    // A known place fills in its kind and card.
+    await page.click('.spend-card [data-action=logPurchase]');
+    await page.waitForSelector('.layer #pu-where');
+    assert.ok(await page.$('#pu-places option[value="Uber Eats"]'), 'places are offered in the datalist');
+    await page.fill('#pu-where', 'uber eats');
+    assert.equal(await page.getAttribute('.layer .cat[data-v=delivery]', 'aria-pressed'), 'true');
+    await closeLayer();
+    // Bad input gets a kind message, not a crash.
+    await page.click('.spend-card [data-action=logPurchase]');
+    await page.waitForSelector('.layer #pu-amt');
+    await page.click('.layer button[type=submit]');
+    assert.match(await page.textContent('.layer .field-error'), /Type how much it cost/);
+    await closeLayer();
+    await r.noSideScroll('today with left to spend');
+
+    // ------------------------------------------------------------ 4. Money: recent purchases, where it went, what you owe
+    await page.click('.tab[data-to=money]');
+    await page.waitForSelector('.buys');
+    assert.equal(await spendAmt(), '$740');
+    assert.deepEqual(await page.$$eval('.buy-day > span:first-child', (e) => e.map((x) => x.textContent)), ['Today']);
+    assert.equal(await page.$$eval('.buy-row', (e) => e.length), 3);
+    assert.match(await page.textContent('.buy-row >> nth=0'), /Amazon — boots.*Shopping · 💳 Visa.*\$120/);
+    assert.match(await page.textContent('.where-card'), /This boat stretch so far\s*\$210/);
+    assert.match(await page.textContent('.where-card .bars.is-places'), /Amazon/);
+    assert.match(await page.textContent('.group [data-action=owe]'), /Visa\s*\$1,320 left/, 'the Visa purchase adds to what you owe');
+    await r.noSideScroll('money');
+
+    // Edit a purchase, then delete one.
+    await page.click('.buy-row:has-text("Shell")');
+    await page.waitForSelector('.layer #pu-amt');
+    assert.equal(await page.inputValue('#pu-amt'), '52');
+    assert.equal(await page.getAttribute('.layer .cat[data-v=gas]', 'aria-pressed'), 'true');
+    await page.fill('#pu-amt', '45');
+    await submitLayer();
+    assert.equal(await spendAmt(), '$747');
+    await page.click('.buy-row:has-text("Uber Eats")');
+    await page.waitForSelector('.layer [data-la=del]');
+    await page.click('.layer [data-la=del]');
+    await page.click('.layer [data-la=pick] >> text=Delete it');
+    await page.waitForSelector('.layer', { state: 'detached' });
+    assert.equal(await spendAmt(), '$785');
+    assert.equal(await page.$$eval('.buy-row', (e) => e.length), 2);
+    assert.deepEqual((await r.state()).purchases.map((p) => [p.where, p.amount, p.category, p.paidWith]),
+      [['Shell', 45, 'gas', 'spending'], ['Amazon', 120, 'shopping', 'debt:visa']]);
+
+    // ------------------------------------------------------------ 5. set balances, add an account
+    await page.click('.group [data-action=account][data-id=checking]');
+    await page.fill('#ac-bal', '1500');
+    await submitLayer();
+    assert.match(await page.textContent('.group [data-action=account][data-id=checking]'), /As of Oct 1.*\$1,500/);
+    await page.click('.group [data-action=account][data-id=spending]');
+    await page.fill('#ac-bal', '700');
+    await submitLayer();
+    assert.equal(await spendAmt(), '$700', 'typing the spending card balance sets left to spend');
+    await page.click('[data-action=addAccount]');
+    await page.click('.layer [data-la=chip][data-v=Cash]');
+    await page.fill('#na-bal', '60');
+    await submitLayer();
+    assert.match(await page.textContent('.group'), /Cash.*\$60/);
+    await page.click('.tab[data-to=today]');
+    assert.equal(await spendAmt(), '$700');
+
+    // ------------------------------------------------------------ 6. welcome home (boat stretch ended) with spending
+    await r.at('2026-10-07');
+    let pop = await page.$('.layer .celebrate');
+    assert.ok(pop, 'welcome-home recap');
+    let txt = await pop.textContent();
+    assert.match(txt, /Welcome home!/);
+    assert.match(txt, /Spent: \$165 — top: Amazon \$120, Shell \$45/);
+    await r.dismissPopups();
+
+    // A purchase at home, logged for yesterday.
+    await r.at('2026-10-11');
+    await page.click('.spend-card [data-action=logPurchase]');
+    await page.waitForSelector('.layer #pu-amt');
+    await page.fill('#pu-amt', '64');
+    await page.fill('#pu-where', 'Walmart');
+    await page.click('.layer .cat[data-v=groceries]');
+    await page.click('.layer [data-la=day] >> text=Yesterday');
+    assert.equal(await page.inputValue('#pu-date'), '2026-10-10');
+    await submitLayer();
+    assert.equal((await r.state()).purchases.find((p) => p.where === 'Walmart').date, '2026-10-10');
+
+    // ------------------------------------------------------------ 7. back out to sea (home stretch ended) with spending
+    await r.at('2026-10-20');
+    pop = await page.$('.layer .celebrate');
+    assert.ok(pop, 'back-out-to-sea recap');
+    txt = await pop.textContent();
+    assert.match(txt, /Back out to sea ⚓/);
+    assert.match(txt, /While you were home \(Oct 6 – Oct 19\)/);
+    assert.match(txt, /Spent: \$64 — top: Walmart \$64/);
+    await r.dismissPopups();
+    await r.at('2026-10-20');
+    assert.equal(await page.$('.layer .celebrate'), null, 'recap shows only once');
+
+    r.noErrors('in the money run on ' + deviceName);
   } finally {
     await ctx.close();
     fs.rmSync(dl, { recursive: true, force: true });
@@ -499,7 +730,7 @@ test('offline file list (sw.js APP_FILES) matches the files on disk and in index
   }
 });
 
-test('Harbor end to end', { timeout: 240000 }, async (t) => {
+test('Harbor end to end', { timeout: 480000 }, async (t) => {
   srv = await startServer();
   browser = await chromium.launch();
   try {
@@ -513,6 +744,8 @@ test('Harbor end to end', { timeout: 240000 }, async (t) => {
     });
     await t.test('iPhone 13', () => runDevice(browser, srv, 'iPhone 13'));
     await t.test('iPad (gen 7)', () => runDevice(browser, srv, 'iPad (gen 7)'));
+    await t.test('money (v2) on iPhone 13', () => runMoney(browser, srv, 'iPhone 13'));
+    await t.test('money (v2) on iPad (gen 7)', () => runMoney(browser, srv, 'iPad (gen 7)'));
   } finally {
     await browser.close();
     await new Promise((res) => srv.http.close(res));

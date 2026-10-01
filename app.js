@@ -199,6 +199,13 @@
     const n = Number(s);
     return Number.isFinite(n) ? E.round2(n) : NaN;
   }
+  // Like parseMoney, but a leading minus is allowed when `allowNeg` (an overdrawn checking account).
+  function parseSigned(v, allowNeg) {
+    const str = String(v == null ? '' : v).trim();
+    const neg = allowNeg && /^[-−–]/.test(str);
+    const n = parseMoney(neg ? str.replace(/^[-−–]\s*/, '') : str);
+    return neg && Number.isFinite(n) ? -n : n;
+  }
   function numStr(n) {
     if (n == null || !Number.isFinite(Number(n))) return '';
     n = E.round2(Number(n));
@@ -228,6 +235,7 @@
     flow: null,
     saveError: false,
     safariLater: false,   // "Later" on the Safari-tab reminder: this launch only
+    allBuys: false,       // Money: show all recent purchases, not just the latest few
   };
 
   // ------------------------------------------------------------------ icons
@@ -238,6 +246,7 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10.5L12 3.8l8.5 6.7V19a1.5 1.5 0 0 1-1.5 1.5h-4.2v-5.8H9.2v5.8H5A1.5 1.5 0 0 1 3.5 19z"/></svg>',
     voyage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"/></svg>',
+    money: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M5.2 7.2l9.6-3.1a1.6 1.6 0 0 1 2.1 1.5v1.6"/><rect x="3.5" y="7.2" width="17" height="12.6" rx="2.6"/><path d="M20.5 11.2h-3.6a2.3 2.3 0 0 0 0 4.6h3.6"/></svg>',
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.6"/><circle cx="10" cy="17" r="2.6"/></svg>',
   };
 
@@ -398,8 +407,8 @@
 
   // ================================================================== SETUP (§6.1)
 
-  const STEPS = ['welcome', 'boat', 'currency', 'pay', 'freq', 'bills', 'debts', 'savings', 'spending', 'done'];
-  const DOT_STEPS = 8;   // steps 1..8 show progress dots
+  const STEPS = ['welcome', 'boat', 'currency', 'pay', 'freq', 'bills', 'debts', 'savings', 'accounts', 'spending', 'done'];
+  const DOT_STEPS = 9;   // steps 1..9 show progress dots
 
   function setupFrame(o) {
     const i = ui.setupStep;
@@ -522,6 +531,20 @@
         emoji: '🏦', title: 'How much do you have saved right now?', lead: money(0) + ' is totally fine.',
         body: '<label class="field"><span class="field-label">Saved right now</span>' +
           moneyField('f-sav', a > 0 ? a : null, { big: true, autofocus: true }) + '</label>',
+      });
+    },
+
+    accounts: function () {
+      const acc = E.accounts(state, today());
+      const typed = function (id) { const a = acc.find(function (x) { return x.id === id; }); return a && a.asOf ? a.balance : null; };
+      return setupFrame({
+        emoji: '💳', title: 'What\'s in checking and on your spending card right now?',
+        lead: 'Open your bank app and copy what it says. Not sure? Skip it — you can add these any time under Money.',
+        body: '<label class="field"><span class="field-label">Checking</span>' +
+          moneyField('f-chk', typed('checking'), { enter: 'next' }) + '</label>' +
+          '<label class="field"><span class="field-label">Spending card — what\'s on it</span>' +
+          moneyField('f-spc', typed('spending')) +
+          '<span class="field-help">The card you use for everyday things. What\'s on it becomes your “left to spend”.</span></label>',
       });
     },
 
@@ -662,6 +685,19 @@
       state.savings = { amount: n, asOf: today() };
       return true;
     },
+    accounts: function (quiet) {
+      const vals = { checking: parseMoney($('f-chk') && $('f-chk').value), spending: parseMoney($('f-spc') && $('f-spc').value) };
+      if (Number.isNaN(vals.checking)) { if (!quiet) setError('f-chk', 'That doesn\'t look like an amount. Try something like 1500.'); return quiet; }
+      if (Number.isNaN(vals.spending)) { if (!quiet) setError('f-spc', 'That doesn\'t look like an amount. Try something like 200.'); return quiet; }
+      const acc = E.accounts(state, today());
+      Object.keys(vals).forEach(function (id) {
+        const n = vals[id];
+        const a = acc.find(function (x) { return x.id === id; });
+        if (n === null || (a && a.asOf && Math.abs(a.balance - n) < 0.005)) return;   // blank, or the same as before
+        E.act.setAccountBalance(state, id, n, now());
+      });
+      return true;
+    },
     spending: function (quiet) {
       const h = parseMoney($('f-home') && $('f-home').value);
       const b = parseMoney($('f-boatspend') && $('f-boatspend').value);
@@ -696,7 +732,8 @@
 
   function renderToday() {
     const s = summary();
-    return '<h1 class="sr-only">Today</h1>' + bannerHTML(s) + '<div class="today-grid">' + nextCardHTML(s) + progressCardHTML(s) + '</div>';
+    return '<h1 class="sr-only">Today</h1>' + bannerHTML(s) + '<div class="today-grid">' + nextCardHTML(s) +
+      '<div class="today-side">' + spendCardHTML(s, false) + progressCardHTML(s) + '</div></div>';
   }
 
   function bannerHTML(s) {
@@ -953,13 +990,422 @@
     slot.innerHTML = V.routeMap(summary().voyage, { width: Math.max(280, w) });
   }
 
+  // ================================================================== MONEY (§10.9)
+
+  const CATS = E.CATEGORIES;
+  function catOf(key) { return CATS.find(function (c) { return c.key === key; }) || CATS[CATS.length - 1]; }
+  function placeKey(w) { return String(w || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+  function isDebtPay(pw) { return typeof pw === 'string' && pw.indexOf('debt:') === 0; }
+
+  // "about $66 a day" (the engine's sub without "until Oct 15"), or '' when there's no daily figure.
+  function perDayShort(sp) {
+    if (!sp.sub || !/^(about|less than) /.test(sp.sub)) return '';
+    return sp.sub.replace(/ until .*$/, '');
+  }
+  function perText(per, sp) {
+    if (per.perDay == null) return '';
+    const r = function (x) { return money(x >= 1 ? Math.round(x) : E.round2(x)); };
+    if (sp.homeDays > 0 && sp.boatDays > 0 && per.perHome > 0) return r(per.perHome) + ' a day at home';
+    return r(per.perDay) + ' a day';
+  }
+  function leftWords(n) { return n < 0 ? money(-n) + ' over' : money(n) + ' left'; }
+
+  // Today (compact) and Money (big): what's left to spend until payday.
+  function spendCardHTML(s, big) {
+    const sp = s.spending;
+    if (!sp.started) {
+      if (big) {
+        return '<section class="card spend-card" aria-labelledby="spend-t">' +
+          '<h2 class="spend-label" id="spend-t">Left to spend</h2>' +
+          '<p class="spend-intro">Log what you buy, and Harbor shows what\'s left to spend until payday.</p>' +
+          '<div class="btn-row spend-actions"><button type="button" class="btn btn-primary" data-action="logPurchase">＋ Log a purchase</button>' +
+          '<button type="button" class="btn btn-soft" data-action="afford">Can I afford it?</button></div></section>';
+      }
+      return '<section class="card spend-invite" aria-label="Left to spend">' +
+        '<p class="invite-text">💳 Want to see what\'s left to spend? <span class="invite-sub">Log what you buy.</span></p>' +
+        '<button type="button" class="btn btn-soft btn-small" data-action="logPurchase">Log a purchase</button></section>';
+    }
+    // Spent before the first payday was logged: it comes out of that payday's spending money.
+    const early = !sp.until && sp.left < 0;
+    const label = early ? 'Spent so far' : 'Left to spend';
+    const amount = early ? -sp.left : Math.max(0, sp.left);
+    let sub = sp.sub || '';
+    if (!sp.until) sub = early ? 'It comes out of your first payday\'s spending money.' : 'When your pay lands, your spending money is added.';
+    let h = '<section class="card spend-card' + (big ? ' is-big' : '') + '" aria-labelledby="spend-t">' +
+      '<h2 class="spend-label" id="spend-t">' + label + '</h2>' +
+      '<p class="spend-amt">' + esc(money(amount)) + '</p>' +
+      (sub ? '<p class="spend-sub">' + esc(sub) + '</p>' : '');
+    if (sp.status === 'over' && sp.until) h += '<p class="spend-over">' + esc(sp.overText) + '</p>';
+    if (big && sp.carried != null && Math.abs(sp.carried) >= 0.5 && sp.until) {
+      h += '<p class="spend-carried">' + (sp.carried > 0
+        ? 'Includes ' + esc(money(sp.carried)) + ' left over from last time 👍'
+        : 'After ' + esc(money(-sp.carried)) + ' you went over last time') + '</p>';
+    }
+    h += '<div class="btn-row spend-actions"><button type="button" class="btn ' + (big ? 'btn-primary' : 'btn-soft') + '" data-action="logPurchase">＋ Log a purchase</button>' +
+      '<button type="button" class="btn ' + (big ? 'btn-soft' : 'btn-text') + '" data-action="afford">Can I afford it?</button></div></section>';
+    return h;
+  }
+
+  function dayLabel(iso) {
+    const t = today();
+    if (iso === t) return 'Today';
+    if (iso === D.addDays(t, -1)) return 'Yesterday';
+    return D.fmtDay(iso) + (iso.slice(0, 4) !== t.slice(0, 4) ? ', ' + iso.slice(0, 4) : '');
+  }
+
+  const BUYS_SHORT = 8;
+  function purchasesHTML(sp) {
+    if (!sp.recent.length) {
+      return '<p class="empty-note">Nothing logged yet. After you buy something, tap ＋ Log a purchase — it takes about 10 seconds.</p>';
+    }
+    const groups = [];
+    const list = ui.allBuys ? sp.recent : sp.recent.slice(0, BUYS_SHORT);
+    list.forEach(function (p) {
+      let g = groups[groups.length - 1];
+      if (!g || g.date !== p.date) { g = { date: p.date, total: 0, list: [] }; groups.push(g); }
+      g.total = E.round2(g.total + p.amount);
+      g.list.push(p);
+    });
+    let h = '<section class="card card-flush buys" aria-label="Recent purchases">' + groups.map(function (g) {
+      return '<h3 class="buy-day"><span>' + esc(dayLabel(g.date)) + '</span><span>' + esc(money(g.total)) + '</span></h3>' +
+        '<ul class="buy-list">' + g.list.map(function (p) {
+          const hint = p.label + (p.paidWith !== 'spending' ? ' · ' + (isDebtPay(p.paidWith) ? '💳 ' : '') + p.paidWithName : '');
+          return '<li><button type="button" class="buy-row" data-action="editPurchase" data-id="' + esc(p.id) + '">' +
+            '<span class="buy-emoji" aria-hidden="true">' + p.emoji + '</span>' +
+            '<span class="list-main"><span class="buy-name">' + esc(p.where) + (p.what ? '<span class="buy-what"> — ' + esc(p.what) + '</span>' : '') + '</span>' +
+            '<span class="buy-sub">' + esc(hint) + '</span></span>' +
+            '<span class="buy-amt">' + esc(money(p.amount)) + '</span></button></li>';
+        }).join('') + '</ul>';
+    }).join('') + '</section>';
+    if (list.length < sp.recent.length) {
+      h += '<button type="button" class="btn btn-text" data-action="allBuys" aria-expanded="false">Show more (' + sp.recent.length + ' in all)</button>';
+    } else if ((state.purchases || []).length > sp.recent.length) {
+      h += '<p class="small-note center">Showing your ' + sp.recent.length + ' most recent.</p>';
+    }
+    return h;
+  }
+
+  function barsHTML(rows, cls, label) {
+    const max = rows.reduce(function (a, r) { return Math.max(a, r.total); }, 0) || 1;
+    return '<ul class="bars ' + cls + '" aria-label="' + esc(label) + '">' + rows.map(function (r) {
+      const w = Math.max(3, Math.round(r.total / max * 100));
+      return '<li class="bar-row"><span class="bar-name">' + r.name + (r.count > 1 ? ' <small>' + r.count + '×</small>' : '') + '</span>' +
+        '<span class="bar-amt">' + esc(money(r.total)) + '</span>' +
+        '<span class="bar-track" aria-hidden="true"><span class="bar-fill" style="width:' + w + '%"></span></span></li>';
+    }).join('') + '</ul>';
+  }
+
+  function whereHTML(s) {
+    if (!(state.purchases || []).length) return '';
+    const cur = s.stretch.current, prev = s.stretch.previous;
+    const kind = cur.where === 'boat' ? 'boat stretch' : cur.where === 'home' ? 'home stretch' : 'pay period';
+    let h = '<h2 class="section-title">Where it went</h2><section class="card where-card">' +
+      '<div class="tiles' + (prev ? '' : ' one') + '">' +
+      '<div class="tile"><span>This ' + kind + ' so far</span><b>' + esc(money(cur.summary.total)) + '</b></div>' +
+      (prev ? '<div class="tile"><span>Last ' + kind + '</span><b>' + esc(money(prev.summary.total)) + '</b></div>' : '') + '</div>';
+    if (!cur.summary.count) {
+      h += '<p class="small-note">Nothing logged yet this ' + kind + '.</p>';
+    } else {
+      h += '<h3 class="mini-title">Top places</h3>' + barsHTML(cur.summary.byPlace.slice(0, 5).map(function (x) {
+        return { name: esc(x.where), total: x.total, count: x.count };
+      }), 'is-places', 'Top places') +
+        '<h3 class="mini-title">By kind</h3>' + barsHTML(cur.summary.byCategory.map(function (x) {
+        return { name: '<span aria-hidden="true">' + x.emoji + '</span> ' + esc(x.label), total: x.total, count: 0 };
+      }), 'is-cats', 'By kind');
+    }
+    return h + '</section>';
+  }
+
+  function accountRowsHTML(s) {
+    let h = '<h2 class="section-title">Accounts</h2><div class="card group">' + s.accounts.map(function (a) {
+      let value, small, cls = '';
+      if (a.balance == null) {
+        value = 'Add balance'; cls = 'is-add';
+        small = a.kind === 'spending' ? 'Or just log a purchase' : null;
+      } else {
+        value = a.kind === 'spending' && a.balance < 0 ? money(-a.balance) + ' over' : money(a.balance);
+        if (!a.asOf) small = a.kind === 'spending' ? 'From what you\'ve logged' : 'Estimated';
+        else small = a.estimated ? 'Estimated · set ' + fdate(a.asOf) : 'As of ' + fdate(a.asOf);
+        cls = 'is-amt';
+      }
+      return row('account', a.name, value, { id: a.id, small: small, valueCls: cls });
+    }).join('') + row('addAccount', '＋ Add an account', null, { cls: 'add', noChev: true }) + '</div>';
+    if (s.debts.length) {
+      h += '<h2 class="section-title">What you owe</h2><div class="card group">' + s.debts.map(function (d) {
+        return row('owe', d.name, d.open ? money(d.balance) + ' left' : 'Paid off 🎉', { id: d.id, valueCls: d.open ? 'is-amt' : '' });
+      }).join('') + '</div>';
+    }
+    return h;
+  }
+
+  function renderMoney() {
+    const s = summary();
+    return '<h1 class="page-title">Money</h1>' + spendCardHTML(s, true) +
+      '<h2 class="section-title">Recent purchases</h2>' + purchasesHTML(s.spending) +
+      whereHTML(s) + accountRowsHTML(s);
+  }
+
+  // --- log / edit a purchase
+  function paidWithOptions(keep) {
+    const s = summary();
+    // Spending card first (the usual one), then checking and the user's own accounts.
+    const opts = s.accounts.filter(function (a) { return a.kind !== 'savings'; })
+      .sort(function (a, b) { return (a.kind === 'spending' ? 0 : 1) - (b.kind === 'spending' ? 0 : 1); })
+      .map(function (a) { return { v: a.id, label: a.name }; });
+    s.debts.forEach(function (d) {
+      if (d.open || (keep && keep.paidWith === 'debt:' + d.id)) opts.push({ v: 'debt:' + d.id, label: '💳 ' + d.name, debt: true });
+    });
+    if (keep && !opts.some(function (o) { return o.v === keep.paidWith; })) {
+      opts.push({ v: keep.paidWith, label: isDebtPay(keep.paidWith) ? 'A card you removed' : 'An account you removed' });
+    }
+    return opts;
+  }
+
+  function openPurchaseSheet(o) {
+    o = o || {};
+    const p = o.id ? (state.purchases || []).find(function (x) { return x.id === o.id; }) : null;
+    if (o.id && !p) return;
+    const t = today();
+    const cur = p ? { amount: p.amount, where: p.where, what: p.what, category: p.category, paidWith: p.paidWith, date: p.date }
+      : { amount: o.amount == null ? null : o.amount, where: '', what: '', category: null, paidWith: 'spending', date: t };
+    const opts = paidWithOptions(p);
+    const places = summary().spending.places;
+    let cat = cur.category, pw = cur.paidWith;
+    const debtName = function (v) { const d = state.debts.find(function (x) { return 'debt:' + x.id === v; }); return d ? d.name : ''; };
+    const pwHelp = function (v) {
+      return isDebtPay(v) ? 'Adds to what you owe on ' + debtName(v) + '. Your next payday plan pays it back.' : '';
+    };
+    const yest = D.addDays(t, -1);
+    const html = sheetHead(p ? 'Edit purchase' : 'Log a purchase', domId('pu')) +
+      '<form data-lsubmit novalidate autocomplete="off">' +
+      '<label class="field"><span class="field-label">How much?</span>' + moneyField('pu-amt', cur.amount, { big: true, enter: 'next' }) + '</label>' +
+      '<label class="field"><span class="field-label">Where?</span><input class="input" id="pu-where" list="pu-places" maxlength="60" autocapitalize="words" autocomplete="off" enterkeyhint="next" placeholder="e.g. Shell" value="' + esc(cur.where) + '">' +
+      '<datalist id="pu-places">' + places.map(function (x) { return '<option value="' + esc(x.where) + '"></option>'; }).join('') + '</datalist></label>' +
+      '<label class="field"><span class="field-label">What? <span class="opt">(optional)</span></span><input class="input" id="pu-what" maxlength="80" autocomplete="off" enterkeyhint="done" placeholder="e.g. lunch" value="' + esc(cur.what) + '"></label>' +
+      '<div class="field"><span class="field-label" id="pu-cat-l">Kind</span><div class="cat-grid" role="group" aria-labelledby="pu-cat-l">' + CATS.map(function (c) {
+        return '<button type="button" class="cat' + (cat === c.key ? ' is-on' : '') + '" data-la="cat" data-v="' + c.key + '" aria-pressed="' + (cat === c.key) + '">' +
+          '<span class="cat-emoji" aria-hidden="true">' + c.emoji + '</span><span class="cat-label">' + esc(c.label) + '</span></button>';
+      }).join('') + '</div></div>' +
+      '<div class="field"><span class="field-label" id="pu-pw-l">Paid with</span><div class="chips pw-chips" role="group" aria-labelledby="pu-pw-l">' + opts.map(function (x) {
+        return '<button type="button" class="chip' + (pw === x.v ? ' is-on' : '') + '" data-la="pw" data-v="' + esc(x.v) + '" aria-pressed="' + (pw === x.v) + '">' +
+          esc(x.label) + (x.debt ? ' <small>— adds to what you owe</small>' : '') + '</button>';
+      }).join('') + '</div><span class="field-help" id="pu-pw-help">' + esc(pwHelp(pw)) + '</span></div>' +
+      '<div class="field"><span class="field-label" id="pu-date-l">When</span><div class="when-row">' +
+      '<button type="button" class="chip' + (cur.date === t ? ' is-on' : '') + '" data-la="day" data-v="' + t + '" aria-pressed="' + (cur.date === t) + '">Today</button>' +
+      '<button type="button" class="chip' + (cur.date === yest ? ' is-on' : '') + '" data-la="day" data-v="' + yest + '" aria-pressed="' + (cur.date === yest) + '">Yesterday</button>' +
+      '<input class="input input-date" type="date" id="pu-date" aria-labelledby="pu-date-l" value="' + esc(cur.date) + '" max="' + (p && p.date > t ? p.date : t) + '"></div></div>' +
+      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">' + (p ? 'Save' : 'Log it') + '</button></div>' +
+      (p ? '<button type="button" class="btn btn-text" data-la="del" style="color:var(--coral-ink);margin-top:14px">Delete this purchase</button>' : '') + '</form>';
+
+    const press = function (box, la, v) {
+      box.querySelectorAll('[data-la="' + la + '"]').forEach(function (x) {
+        const on = x.dataset.v === v;
+        x.setAttribute('aria-pressed', String(on));
+        x.classList.toggle('is-on', on);
+      });
+    };
+    const setPw = function (box, v) {
+      if (!opts.some(function (x) { return x.v === v; })) return;
+      pw = v; press(box, 'pw', v);
+      const help = $('pu-pw-help'); if (help) help.textContent = pwHelp(v);
+    };
+    const entry = openLayer(html, {
+      actions: {
+        cat: function (el, en) { cat = el.dataset.v; press(en.box, 'cat', cat); },
+        pw: function (el, en) { setPw(en.box, el.dataset.v); },
+        day: function (el, en) { $('pu-date').value = el.dataset.v; press(en.box, 'day', el.dataset.v); },
+        del: function (el, en) {
+          confirmBox('Delete this purchase?', money(p.amount) + ' at ' + p.where + ' on ' + fdate(p.date) + '.', 'Delete it', 'Keep it', true).then(function (yes) {
+            if (!yes) return;
+            E.act.deletePurchase(state, p.id);
+            save(); closeLayer(en); render(); toast('Purchase deleted.');
+          });
+        },
+      },
+      onSubmit: function (form, en) {
+        clearErrors(en.box);
+        const amount = parseMoney($('pu-amt').value);
+        if (amount === null) { setError('pu-amt', 'Type how much it cost.'); return; }
+        if (!(amount > 0)) { setError('pu-amt', 'That doesn\'t look like an amount. Try something like 12.50.'); return; }
+        const date = $('pu-date').value || t;
+        const input = { date: date, amount: amount, where: $('pu-where').value, what: $('pu-what').value, category: cat || 'other', paidWith: pw };
+        let added = null;
+        try {
+          if (p) E.act.editPurchase(state, p.id, input, now());
+          else added = E.act.addPurchase(state, input, now());
+        } catch (err) {
+          const msg = (err && err.message) || 'Something didn\'t work. Try again.';
+          setError(/day/i.test(msg) ? 'pu-date' : 'pu-amt', msg);
+          return;
+        }
+        save(); closeLayer(en); render();
+        if (p) { toast('Saved.'); return; }
+        const sp = summary().spending;
+        let msg = 'Logged ✓';
+        if (sp.started && sp.until) {
+          msg += sp.left < 0 ? ' You\'re ' + money(-sp.left) + ' over — no stress, it comes out of next payday.'
+            : ' ' + money(sp.left) + ' left' + (perDayShort(sp) ? ' · ' + perDayShort(sp) : '') + '.';
+        }
+        if (isDebtPay(added.paidWith)) msg += ' Added to your ' + debtName(added.paidWith) + ' balance.';
+        toast(msg, 4200);
+      },
+    });
+    // Picking a place you've used before fills in its usual kind and card.
+    const where = $('pu-where');
+    const onWhere = function () {
+      const k = placeKey(where.value);
+      const hit = k && places.find(function (x) { return placeKey(x.where) === k; });
+      if (!hit) return;
+      cat = hit.category; press(entry.box, 'cat', cat);
+      setPw(entry.box, hit.paidWith);
+    };
+    where.addEventListener('input', onWhere);
+    where.addEventListener('change', onWhere);
+    $('pu-date').addEventListener('change', function () { press(entry.box, 'day', $('pu-date').value); });
+  }
+
+  // --- can I afford it?
+  function affordResultHTML(price) {
+    const sp = summary().spending;
+    if (!(price > 0)) {
+      const line = sp.started && sp.until
+        ? 'Right now: ' + leftWords(sp.left) + (perDayShort(sp) ? ' · ' + perDayShort(sp) : '') + '.'
+        : 'Type a price to see how it fits before payday.';
+      return '<div class="verdict verdict-idle"><p class="verdict-sub">' + esc(line) + '</p></div>';
+    }
+    const a = E.afford(state, today(), price, { money: money });
+    const emoji = { ok: '✅', tight: '🤔', wait: '✋' }[a.verdict] || '🤔';
+    const tile = function (label, per) {
+      const pd = perText(per, sp);
+      return '<div class="tile"><span>' + label + '</span><b>' + esc(leftWords(per.left)) + '</b>' + (pd ? '<small>' + esc(pd) + '</small>' : '') + '</div>';
+    };
+    return '<div class="verdict verdict-' + a.verdict + '">' +
+      '<div class="verdict-head"><span class="verdict-emoji" aria-hidden="true">' + emoji + '</span><p class="verdict-text">' + esc(a.headline) + '</p></div>' +
+      (a.sub && !a.started ? '<p class="verdict-sub">' + esc(a.sub) + '</p>' : '') +
+      '<div class="tiles verdict-tiles">' + tile('Now', a.before) + '<span class="arrow" aria-hidden="true">→</span>' + tile('After', a.after) + '</div></div>';
+  }
+
+  function openAffordSheet() {
+    const html = sheetHead('Can I afford it?', domId('af')) +
+      '<form data-lsubmit novalidate autocomplete="off">' +
+      '<label class="field"><span class="field-label">How much is it?</span>' + moneyField('af-amt', null, { big: true }) + '</label>' +
+      '<div id="af-result" aria-live="polite">' + affordResultHTML(null) + '</div>' +
+      '<div class="sheet-actions"><button type="button" class="btn btn-primary" data-la="buy">I bought it — log it</button>' +
+      '<button type="button" class="btn btn-text" data-la="close">Close</button></div></form>';
+    const entry = openLayer(html, {
+      actions: {
+        buy: function (el, en) {
+          clearErrors(en.box);
+          const price = parseMoney($('af-amt').value);
+          if (!(price > 0)) { setError('af-amt', 'Type the price first.'); return; }
+          closeLayer(en);
+          openPurchaseSheet({ amount: price });
+        },
+      },
+      onSubmit: function () { const a = $('af-amt'); if (a) a.blur(); },
+    });
+    $('af-amt').addEventListener('input', function () {
+      const n = parseMoney($('af-amt').value);
+      $('af-result').innerHTML = affordResultHTML(Number.isFinite(n) ? n : null);
+    });
+    return entry;
+  }
+
+  // --- accounts
+  function openAccountSheet(id) {
+    const a = summary().accounts.find(function (x) { return x.id === id; });
+    if (!a) return;
+    const neg = a.kind !== 'spending' && a.kind !== 'savings';
+    const guess = a.balance == null ? '' : 'We think it\'s ' + money(a.kind === 'spending' ? Math.max(0, a.balance) : a.balance) +
+      (a.asOf ? ' — you last set it ' + fdate(a.asOf) + '.' : '.');
+    const lead = a.kind === 'spending' ? 'Open your bank app and type what\'s on this card. That becomes your “left to spend”.'
+      : 'Open your bank app and type what it says.';
+    const html = sheetHead(a.name, domId('ac')) + '<p class="sheet-lead">' + esc(lead) + '</p>' +
+      '<form data-lsubmit novalidate autocomplete="off">' +
+      '<label class="field"><span class="field-label">' + (a.kind === 'spending' ? 'What\'s on it now' : 'What\'s in it now') + '</span>' +
+      moneyField('ac-bal', null, { big: true }) +
+      (guess ? '<span class="field-help">' + esc(guess) + '</span>' : '') + '</label>' +
+      '<label class="field"><span class="field-label">Name</span><input class="input" id="ac-name" maxlength="40" autocapitalize="words" value="' + esc(a.name) + '"></label>' +
+      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div>' +
+      (a.builtIn ? '' : '<button type="button" class="btn btn-text" data-la="del" style="color:var(--coral-ink);margin-top:14px">Remove this account</button>') + '</form>';
+    openLayer(html, {
+      actions: {
+        del: function (el, entry) {
+          confirmBox('Remove ' + a.name + '?', 'Purchases you paid with it stay in your list.', 'Remove it', 'Keep it', true).then(function (yes) {
+            if (!yes) return;
+            E.act.deleteAccount(state, a.id);
+            save(); closeLayer(entry); render(); toast('Account removed.');
+          });
+        },
+      },
+      onSubmit: function (form, entry) {
+        clearErrors(entry.box);
+        const name = $('ac-name').value.trim();
+        const n = parseSigned($('ac-bal').value, neg);
+        if (!name) { setError('ac-name', 'Give it a name.'); return; }
+        if (Number.isNaN(n)) { setError('ac-bal', 'That doesn\'t look like an amount. Try something like 1500.'); return; }
+        try {
+          if (name !== a.name) E.act.renameAccount(state, a.id, name);
+          if (n !== null) {
+            if (a.id === 'savings' && !state.paydays.length && !state.checkins.length) state.savings = { amount: n, asOf: today() };
+            else E.act.setAccountBalance(state, a.id, n, now());
+          }
+        } catch (err) { setError('ac-bal', (err && err.message) || 'Something didn\'t work. Try again.'); return; }
+        save(); closeLayer(entry); render(); toast('Saved.');
+      },
+    });
+  }
+
+  const ACCOUNT_CHIPS = ['Cash', 'Second savings', 'Joint account', 'Wallet app'];
+  function openAddAccountSheet() {
+    let kind = 'cash';
+    const html = sheetHead('Add an account', domId('na')) +
+      '<p class="sheet-lead">Cash, another bank account, a second savings — anything you want to keep an eye on.</p>' +
+      '<form data-lsubmit novalidate autocomplete="off">' +
+      '<label class="field"><span class="field-label">Name</span><input class="input" id="na-name" data-chip-target maxlength="40" autocapitalize="words" enterkeyhint="next" placeholder="e.g. Cash"></label>' +
+      chipsHTML(ACCOUNT_CHIPS, '') +
+      '<div class="field"><span class="field-label">What kind?</span><div class="seg" role="group" aria-label="What kind">' +
+      '<button type="button" data-la="kind" data-v="cash" aria-pressed="true">Cash</button>' +
+      '<button type="button" data-la="kind" data-v="other" aria-pressed="false">Other</button></div></div>' +
+      '<label class="field"><span class="field-label">What\'s in it now <span class="opt">(optional)</span></span>' + moneyField('na-bal', null, {}) + '</label>' +
+      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Add account</button></div></form>';
+    const setKind = function (box, v) {
+      kind = v === 'cash' ? 'cash' : 'other';
+      box.querySelectorAll('[data-la="kind"]').forEach(function (x) { x.setAttribute('aria-pressed', String(x.dataset.v === kind)); });
+    };
+    openLayer(html, {
+      actions: {
+        chip: function (el, entry) { chipAction(el, entry); setKind(entry.box, el.dataset.v === 'Cash' ? 'cash' : 'other'); },
+        kind: function (el, entry) { setKind(entry.box, el.dataset.v); },
+      },
+      onSubmit: function (form, entry) {
+        clearErrors(entry.box);
+        const name = $('na-name').value.trim();
+        const n = parseSigned($('na-bal').value, true);
+        if (!name) { setError('na-name', 'Give it a name, like "Cash".'); return; }
+        if (Number.isNaN(n)) { setError('na-bal', 'That doesn\'t look like an amount — or leave it empty.'); return; }
+        const acct = E.act.addAccount(state, { name: name, kind: kind });
+        if (n !== null) E.act.setAccountBalance(state, acct.id, n, now());
+        save(); closeLayer(entry); render(); toast(acct.name + ' added.');
+      },
+    });
+  }
+
+  function openOweSheet(id) {
+    const d = summary().debts.find(function (x) { return x.id === id; });
+    if (!d) return;
+    openMoneySheet({ title: d.name, label: 'How much is left on it now?', lead: 'Open your bank app and type what it says.',
+      value: null, help: 'We think it\'s ' + money(d.balance) + '.', example: '1200',
+      save: function (n) { E.act.setDebtBalance(state, d.id, n, now()); } });
+  }
+
   // ================================================================== SETTINGS (§6.5)
 
   function row(action, label, value, o) {
     o = o || {};
     return '<button type="button" class="row' + (o.cls ? ' ' + o.cls : '') + '" data-action="' + action + '"' + (o.id ? ' data-id="' + esc(o.id) + '"' : '') + '>' +
       '<span class="row-label">' + esc(label) + (o.small ? '<small>' + esc(o.small) + '</small>' : '') + '</span>' +
-      (value != null ? '<span class="row-value">' + esc(value) + '</span>' : '') +
+      (value != null ? '<span class="row-value' + (o.valueCls ? ' ' + o.valueCls : '') + '">' + esc(value) + '</span>' : '') +
       (o.noChev ? '' : '<span class="chev" aria-hidden="true">›</span>') + '</button>';
   }
 
@@ -1051,7 +1497,7 @@
 
   // ================================================================== RENDER + ROUTER
 
-  const SCREENS = { setup: renderSetup, today: renderToday, payday: renderPayday, voyage: renderVoyage, settings: renderSettings };
+  const SCREENS = { setup: renderSetup, today: renderToday, payday: renderPayday, money: renderMoney, voyage: renderVoyage, settings: renderSettings };
 
   function render() {
     if (!state.setupDone) ui.screen = 'setup';
@@ -1073,10 +1519,10 @@
   function cssEsc(s) { return String(s).replace(/["\\]/g, '\\$&'); }
 
   function renderTabs() {
-    const show = state.setupDone && (ui.screen === 'today' || ui.screen === 'voyage' || ui.screen === 'settings');
+    const show = state.setupDone && (ui.screen === 'today' || ui.screen === 'money' || ui.screen === 'voyage' || ui.screen === 'settings');
     $tabs.hidden = !show;
     if (!show) { $tabs.innerHTML = ''; return; }
-    const tabs = [['today', 'Today'], ['voyage', 'Voyage'], ['settings', 'Settings']];
+    const tabs = [['today', 'Today'], ['money', 'Money'], ['voyage', 'Voyage'], ['settings', 'Settings']];
     $tabs.innerHTML = '<div class="tabs-inner">' + tabs.map(function (t) {
       const on = ui.screen === t[0];
       return '<button type="button" class="tab" data-action="go" data-to="' + t[0] + '"' + (on ? ' aria-current="page"' : '') + '>' +
@@ -1102,6 +1548,7 @@
 
   function go(screen) {
     if (screen !== 'payday') ui.flow = null;
+    if (screen !== ui.screen) ui.allBuys = false;
     ui.screen = screen;
     render();
     window.scrollTo(0, 0);
@@ -1243,19 +1690,32 @@
     const stats = [];
     if (r.debtPaid > 0) stats.push('<div class="recap-stat"><b>' + esc(money(r.debtPaid)) + '</b><span>paid on debts</span></div>');
     if (r.saved > 0) stats.push('<div class="recap-stat"><b>' + esc(money(r.saved)) + '</b><span>saved</span></div>');
-    if (!stats.length) return '<p class="recap-list" style="margin-top:14px">You kept your bills covered. That counts.</p>';
+    if (!stats.length) return r.paydays > 0 ? '<p class="recap-list" style="margin-top:14px">You kept your bills covered. That counts.</p>' : '<div style="height:14px"></div>';
     return '<div class="recap-stats' + (stats.length === 1 ? ' one' : '') + '">' + stats.join('') + '</div>';
   }
 
+  // "Spent: $1,240 — top: Uber Eats $310 (9×), Shell $180"
+  function recapSpentHTML(r) {
+    const sp = r.spent;
+    if (!sp || !(sp.count > 0)) return '';
+    const top = sp.byPlace.slice(0, 2).map(function (x) {
+      return esc(x.where) + ' ' + esc(money(x.total)) + (x.count > 1 ? ' (' + x.count + '×)' : '');
+    }).join(', ');
+    return '<p class="recap-list">🧾 Spent: <b>' + esc(money(sp.total)) + '</b>' + (top ? ' — top: ' + top : '') + '</p>' +
+      (r.compare && r.compare.text ? '<p class="recap-list recap-compare">' + esc(r.compare.text) + '</p>' : '');
+  }
+
   function showRecap(r) {
+    const home = r.where === 'home';   // a home stretch just ended: back out to sea
     const paid = r.paidOff && r.paidOff.length
       ? '<p class="recap-list">🏝️ Paid off: <b>' + esc(r.paidOff.join(', ')) + '</b></p>' : '';
     const steps = r.total > 0 ? '<p class="recap-list">✓ You ticked ' + r.ticked + ' of ' + plural(r.total, 'step') +
       ' on ' + plural(r.paydays, 'payday') + '.</p>' : '';
-    openLayer('<div class="celebrate"><div class="big-emoji" aria-hidden="true">🏠</div>' +
-      '<h2>Welcome home!</h2><p style="margin-bottom:0">While you were out <span class="nowrap">(' + esc(D.fmtRange(r.start, r.end)) + '):</span></p>' +
+    openLayer('<div class="celebrate"><div class="big-emoji" aria-hidden="true">' + (home ? '🚢' : '🏠') + '</div>' +
+      '<h2>' + esc(r.title || (home ? 'Back out to sea ⚓' : 'Welcome home!')) + '</h2>' +
+      '<p style="margin-bottom:0">' + (home ? 'While you were home' : 'While you were out') + ' <span class="nowrap">(' + esc(D.fmtRange(r.start, r.end)) + '):</span></p>' +
       recapStats(r) +
-      paid + steps +
+      paid + steps + recapSpentHTML(r) +
       '<button type="button" class="btn btn-primary" data-la="close">Nice!</button></div>',
     { center: true, focus: 'box' });
   }
@@ -1473,7 +1933,7 @@
   function openMoneySheet(o) {
     const html = sheetHead(o.title, domId('m')) + (o.lead ? '<p class="sheet-lead">' + esc(o.lead) + '</p>' : '') +
       '<form data-lsubmit novalidate autocomplete="off"><label class="field"><span class="field-label">' + esc(o.label) + '</span>' +
-      moneyField('m-val', o.value, { big: true }) + (o.help ? '<span class="field-help">' + esc(o.help) + '</span>' : '') + '</label>' +
+      moneyField('m-val', o.value, { big: true, placeholder: o.placeholder }) + (o.help ? '<span class="field-help">' + esc(o.help) + '</span>' : '') + '</label>' +
       '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div></form>';
     openLayer(html, {
       onSubmit: function (form, entry) {
@@ -1585,7 +2045,15 @@
         moneyField('ci-' + d.id, null, { placeholder: 'We think ' + E.round2(d.balance).toLocaleString('en-US'), enter: 'next' }) + '</label>';
     });
     fields += '<label class="field"><span class="field-label">Savings</span>' +
-      moneyField('ci-savings', null, { placeholder: 'We think ' + E.round2(s.savings).toLocaleString('en-US') }) + '</label>';
+      moneyField('ci-savings', null, { placeholder: 'We think ' + E.round2(s.savings).toLocaleString('en-US'), enter: 'next' }) + '</label>';
+    // Checking, the spending card (= what's left to spend) and the user's own accounts.
+    const accts = s.accounts.filter(function (a) { return a.id !== 'savings'; });
+    accts.forEach(function (a) {
+      const label = a.kind === 'spending' ? a.name + ' — what\'s left' : a.name;
+      const guess = a.balance == null ? '' : 'We think ' + E.round2(a.kind === 'spending' ? Math.max(0, a.balance) : a.balance).toLocaleString('en-US');
+      fields += '<label class="field"><span class="field-label">' + esc(label) + '</span>' +
+        moneyField('ci-acct-' + a.id, null, { placeholder: guess }) + '</label>';
+    });
     // Undone debt/savings steps from the latest payday: tick them first, so a real balance isn't counted twice.
     const latest = state.paydays[state.paydays.length - 1];
     const pending = latest ? (latest.plan.items || []).filter(function (it) {
@@ -1625,6 +2093,14 @@
         });
         const sv = parseMoney($('ci-savings').value);
         if (Number.isNaN(sv)) bad = bad || 'ci-savings';
+        const accounts = {};
+        accts.forEach(function (a) {
+          const el = $('ci-acct-' + a.id);
+          const n = el ? parseSigned(el.value, a.kind !== 'spending') : null;
+          if (n === null) return;
+          if (Number.isNaN(n)) { bad = bad || 'ci-acct-' + a.id; return; }
+          accounts[a.id] = n; any = true;
+        });
         if (bad) { setError(bad, 'That doesn\'t look like an amount.'); return; }
         if (sv !== null) any = true;
         const n = now();
@@ -1639,7 +2115,7 @@
           save(); closeLayer(entry); render();
           return;
         }
-        E.act.addCheckin(state, { debts: debts, savings: sv }, n);
+        E.act.addCheckin(state, { debts: debts, savings: sv, accounts: accounts }, n);
         save(); closeLayer(entry); render();
         toast('Thanks! Your numbers are up to date.');
       },
@@ -1904,6 +2380,15 @@
     flowContinue: function () { ui.flow.step = 'B'; ui.flow.fromA = true; render(); window.scrollTo(0, 0); const a = $('p-amt'); if (a) a.focus(); },
     fillUsual: function () { const a = $('p-amt'); if (a) { a.value = numStr(state.settings.payAmount); a.focus(); } },
     tipDone: function () { state.meta.tips.spendingCard = true; save(); render(); },
+
+    // money
+    logPurchase: function () { openPurchaseSheet(null); },
+    editPurchase: function (el) { openPurchaseSheet({ id: el.dataset.id }); },
+    afford: function () { openAffordSheet(); },
+    allBuys: function () { ui.allBuys = true; render(); },
+    account: function (el) { openAccountSheet(el.dataset.id); },
+    addAccount: function () { openAddAccountSheet(); },
+    owe: function (el) { openOweSheet(el.dataset.id); },
 
     // voyage
     logOpen: function (el) { openLogSheet(el.dataset.id); },

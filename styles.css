@@ -139,6 +139,9 @@ body.no-tabs #app { padding-bottom: calc(var(--sab) + 24px); }
   body[data-screen="today"] #app { max-width: 980px; }
   .today-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; align-items: start; }
   .today-grid > .card { margin-top: 0; }
+  .today-side > .card:first-child { margin-top: 0; }
+  .today-side .spend-actions { flex-direction: column; gap: 4px; }
+  .today-side .spend-actions .btn { flex: none; }
 }
 
 .boot { padding: 30vh 16px 0; text-align: center; }
@@ -460,6 +463,157 @@ body.no-tabs #app { padding-bottom: calc(var(--sab) + 24px); }
   color: var(--sea);
 }
 
+/* ------------------------------------------------------------------ money: left to spend (§10.9) */
+
+.spend-label { font-size: 15px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.spend-amt { font-size: 40px; font-weight: 800; line-height: 1.1; letter-spacing: -.01em; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.spend-card.is-big .spend-amt { font-size: 52px; }
+.spend-sub { font-size: 17px; font-weight: 600; color: var(--muted); margin-top: 4px; }
+.spend-intro { font-size: 18px; margin-top: 6px; }
+.spend-over {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--sand);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.spend-carried { font-size: 16px; font-weight: 700; color: var(--teal-ink); margin-top: 8px; }
+.spend-actions { margin-top: 16px; gap: 10px; }
+.spend-actions .btn { min-width: 0; padding: 10px 12px; font-size: 18px; }
+
+.spend-invite {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 14px 18px;
+}
+.invite-text { flex: 1 1 auto; min-width: 0; font-size: 17px; font-weight: 700; line-height: 1.35; }
+.invite-sub { font-weight: 600; color: var(--muted); }
+.spend-invite .btn { flex: none; }
+.spend-actions .btn-text { min-height: 52px; }
+@media (max-width: 479px) {
+  .spend-actions { flex-direction: column; gap: 4px; }
+  .spend-actions .btn { flex: none; }
+  .spend-card.is-big .spend-actions { gap: 10px; }
+  .spend-invite { flex-direction: column; align-items: stretch; gap: 10px; }
+  .spend-invite .btn { width: 100%; }
+}
+
+/* purchase sheet */
+.opt { font-weight: 600; opacity: .8; }
+.cat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.cat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 8px 4px;
+  border: 1.5px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+}
+.cat-emoji { font-size: 26px; line-height: 1.1; }
+.cat-label { font-size: 14px; font-weight: 700; line-height: 1.15; text-align: center; letter-spacing: -.01em; hyphens: none; }
+@media (max-width: 400px) { .cat { padding-left: 2px; padding-right: 2px; } .cat-label { font-size: 13px; } }
+.cat.is-on { border-color: var(--sea); background: var(--sea-soft); box-shadow: 0 0 0 1.5px var(--sea); }
+.cat:active { transform: scale(.96); }
+.pw-chips { margin-top: 0; }
+.pw-chips .chip { text-align: left; line-height: 1.25; }
+.pw-chips .chip small { font-size: 14px; font-weight: 600; color: var(--muted); }
+.when-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.when-row .chip { min-height: 48px; }
+.when-row .input-date { flex: 1 1 170px; width: auto; min-width: 0; min-height: 50px; padding-top: 8px; padding-bottom: 8px; font-size: 18px; }
+
+/* can I afford it? */
+.verdict { border-radius: 18px; padding: 16px; margin-bottom: 8px; }
+.verdict-idle { background: var(--bg); }
+.verdict-ok { background: var(--teal-soft); }
+.verdict-tight { background: var(--sand); }
+.verdict-wait { background: var(--coral-soft); }
+.verdict-head { display: flex; gap: 12px; align-items: flex-start; }
+.verdict-emoji { font-size: 28px; line-height: 1.1; flex: none; }
+.verdict-text { font-size: 19px; font-weight: 800; line-height: 1.35; }
+.verdict-sub { font-size: 16px; font-weight: 600; color: var(--muted); margin-top: 6px; }
+.verdict-idle .verdict-sub { margin-top: 0; font-size: 17px; }
+.tiles.verdict-tiles { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: 8px; margin-top: 14px; }
+.verdict-tiles .tile { background: color-mix(in srgb, var(--card) 70%, transparent); }
+.verdict-tiles .tile b { font-size: 20px; }
+.verdict-tiles .arrow { align-self: center; }
+.verdict-tiles .arrow { font-size: 22px; font-weight: 800; color: var(--muted); }
+
+/* stat tiles (where it went, afford) */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tiles.one { grid-template-columns: 1fr; }
+.tile { min-width: 0; padding: 12px 14px; border-radius: 16px; background: var(--bg); }
+.tile span { display: block; font-size: 15px; font-weight: 700; color: var(--muted); line-height: 1.3; }
+.tile b { display: block; font-size: 24px; font-weight: 800; line-height: 1.2; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile small { display: block; font-size: 15px; font-weight: 600; color: var(--muted); margin-top: 2px; }
+
+/* recent purchases */
+.buy-day {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px 6px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--muted);
+  background: var(--bg);
+  border-top: 1.5px solid var(--line);
+}
+.buys > .buy-day:first-child { border-top: 0; }
+.buy-list { list-style: none; margin: 0; padding: 0; }
+.buy-list li + li { border-top: 1.5px solid var(--line); }
+.buy-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 10px 18px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  text-align: left;
+}
+.buy-emoji {
+  flex: none;
+  width: 42px; height: 42px;
+  border-radius: 14px;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+}
+.buy-name { display: block; font-size: 18px; font-weight: 700; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buy-what { font-weight: 600; color: var(--muted); }
+.buy-sub { display: block; font-size: 15px; color: var(--muted); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buy-amt { flex: none; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.small-note.center { text-align: center; }
+
+/* where it went */
+.mini-title { font-size: 16px; font-weight: 800; margin: 20px 2px 8px; }
+.where-card .small-note { margin-top: 12px; }
+.bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; }
+.bar-name { min-width: 0; font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-name small { font-size: 14px; font-weight: 700; color: var(--muted); }
+.bar-amt { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.bar-track { grid-column: 1 / -1; height: 10px; border-radius: 99px; background: var(--bg); overflow: hidden; }
+.bar-fill { display: block; height: 100%; border-radius: 99px; background: var(--sea); }
+.bars.is-cats .bar-fill { background: var(--gold); }
+
+/* accounts */
+.row-value.is-add { color: var(--sea); font-weight: 700; }
+.row-value.is-amt { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.recap-compare { font-weight: 800; color: var(--ink); }
+
 /* ------------------------------------------------------------------ setup */
 
 .setup {
@@ -696,9 +850,7 @@ body.no-tabs #app { padding-bottom: calc(var(--sab) + 24px); }
 input[type="date"].input { min-height: 58px; line-height: 1.3; }
 input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 input[type="date"]::-webkit-calendar-picker-indicator { opacity: .6; width: 22px; height: 22px; }
-@media (prefers-color-scheme: dark) {
-  input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
-}
+/* color-scheme: dark already draws a light picker icon in dark mode. */
 
 .money { position: relative; display: block; }
 .money .cur {
@@ -951,7 +1103,7 @@ input[type="range"]::-moz-range-thumb { width: 30px; height: 30px; border-radius
 #tabs[hidden] { display: none; }
 .tabs-inner {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   max-width: 560px;
   margin: 0 auto;
 }

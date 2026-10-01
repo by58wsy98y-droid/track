@@ -8,6 +8,7 @@
   'use strict';
 
   const EPS = 0.005;            // anything below half a cent counts as zero
+  const SCHEMA = 2;             // §10.1 — schema 1 (v1) data migrates on load/restore
   const PAY_FREQS = ['weekly', 'biweekly', 'semimonthly', 'monthly', 'rotation', 'varies'];
   const STAGE_NAMES = { 1: 'Starter cushion', 2: 'Crush the debt', 3: 'Full safety net', 4: 'Safe Harbor' };
   const DAYS_PER_MONTH = 365.25 / 12;
@@ -260,10 +261,62 @@
     },
   };
 
-  // ---------------------------------------------------------------- replay (§4.4)
+  // ---------------------------------------------------------------- accounts & categories (§10.1)
+
+  const BUILTIN_ACCOUNTS = [
+    { id: 'checking', name: 'Checking', kind: 'checking' },
+    { id: 'spending', name: 'Spending card', kind: 'spending' },
+    { id: 'savings', name: 'Savings', kind: 'savings' },
+  ];
+  const BUILTIN_IDS = { checking: true, spending: true, savings: true };
+  const MONEY_KINDS = { checking: true, cash: true, other: true };   // plain balances adjusted by events
+  const CATEGORIES = [
+    { key: 'eat', emoji: '🍔', label: 'Eating out' },
+    { key: 'delivery', emoji: '🛵', label: 'Delivery' },
+    { key: 'groceries', emoji: '🛒', label: 'Groceries' },
+    { key: 'gas', emoji: '⛽', label: 'Gas' },
+    { key: 'fun', emoji: '🎉', label: 'Going out' },
+    { key: 'shopping', emoji: '🛍️', label: 'Shopping' },
+    { key: 'travel', emoji: '✈️', label: 'Travel' },
+    { key: 'other', emoji: '📦', label: 'Other' },
+  ];
+  const CAT = {};
+  CATEGORIES.forEach((c) => { CAT[c.key] = c; });
+
+  function cleanText(v, max) {
+    return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max).trim() : '';
+  }
+  // A number the user really typed (not blank / null / junk).
+  function given(v) {
+    return v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
+  }
+
+  // Built-ins first (always there, maybe renamed), then the user's own accounts.
+  function accountsOf(state) {
+    const list = Array.isArray(state && state.accounts) ? state.accounts : [];
+    const out = BUILTIN_ACCOUNTS.map((b) => {
+      const f = list.find((a) => a && a.id === b.id);
+      return { id: b.id, name: (f && cleanText(f.name, 40)) || b.name, kind: b.kind, builtIn: true };
+    });
+    list.forEach((a) => {
+      if (!a || typeof a.id !== 'string' || !a.id || BUILTIN_IDS[a.id]) return;
+      if (out.some((x) => x.id === a.id)) return;
+      out.push({ id: a.id, name: cleanText(a.name, 40) || 'Account', kind: a.kind === 'cash' ? 'cash' : 'other', builtIn: false });
+    });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- replay (§4.4, §10.2)
 
   function isTicked(pd, key) { return !!(pd.ticks && pd.ticks[key]); }
 
+  /* Event order inside one day:
+   *   0 due dates (debt interest + minimum, bills)
+   *   1 ticks, 2 purchases + check-ins (by t)      — things done before that day's payday was logged
+   *   3 paydays (deposit + pot refill)
+   *   4 ticks, 5 purchases + check-ins (by t)      — everything after it
+   * A payday without `t` (made by v1) counts as logged first thing, so v1 data keeps
+   * "payday, then ticks, then check-ins". A check-in always follows same-day ticks of its group. */
   function replay(state, untilIso, opts) {
     opts = opts || {};
     if (!D.isValid(untilIso)) untilIso = D.todayLocal();
@@ -277,39 +330,111 @@
     const sv = state.savings || { amount: 0, asOf: state.createdAt };
     let savings = round2(Math.max(0, num(sv.amount)));
     const savingsAsOf = sv.asOf || '0000-01-01';
+    let savingsSetOn = D.isValid(sv.asOf) ? sv.asOf : null, savingsChanged = false;
 
-    // Collect events: [date, order, t, seq, fn]
+    // Money accounts: unknown (null) until a check-in sets one.
+    const acctList = accountsOf(state);
+    const acc = {};
+    acctList.forEach((a) => { if (MONEY_KINDS[a.kind]) acc[a.id] = { balance: null, asOf: null, changed: false }; });
+    const adjust = (id, delta) => {
+      const a = acc[id];
+      if (!a || a.balance === null || !delta) return;
+      a.balance = round2(a.balance + delta);
+      a.changed = true;
+    };
+
+    const paydays = (state.paydays || []).filter((pd) => pd && pd.id !== opts.excludePaydayId &&
+      pd.plan && Array.isArray(pd.plan.items) && D.isValid(pd.date));
+    const purchases = (state.purchases || []).filter((p) => p && D.isValid(p.date) && num(p.amount) > 0);
+    const checkins = (state.checkins || []).filter((c) => c && D.isValid(c.date));
+    const setsAcct = (c, id) => !!(c.accounts && given(c.accounts[id]));
+
+    // The spending pot starts once logging starts (§10.2).
+    let firstLog = null;
+    purchases.forEach((p) => { if (!firstLog || p.date < firstLog) firstLog = p.date; });
+    checkins.forEach((c) => { if (setsAcct(c, 'spending') && (!firstLog || c.date < firstLog)) firstLog = c.date; });
+    let potStart = null;
+    if (firstLog && firstLog <= untilIso) {
+      let best = null;
+      paydays.forEach((pd) => { if (pd.date <= firstLog && (!best || pd.date > best)) best = pd.date; });
+      potStart = best || firstLog;
+    }
+    let pot = potStart ? 0 : null;
+    let potSetOn = null, potChanged = false;
+    const refills = [];
+
+    // Bills only matter once checking has a real number.
+    let checkingFrom = null;
+    checkins.forEach((c) => {
+      if (c.date <= untilIso && setsAcct(c, 'checking') && (!checkingFrom || c.date < checkingFrom)) checkingFrom = c.date;
+    });
+
+    // Same-day ordering around a payday (see the comment above).
+    const payT = new Map();
+    paydays.forEach((pd) => {
+      if (pd.date > untilIso) return;
+      const t = Number.isFinite(pd.t) && pd.t > 0 ? pd.t : -Infinity;
+      payT.set(pd.date, payT.has(pd.date) ? Math.min(payT.get(pd.date), t) : t);
+    });
+    const after = (date, t) => payT.has(date) && t >= payT.get(date);
+
+    // Collect events: { date, order, t, seq, run }
     const events = [];
     let seq = 0;
+    const push = (date, order, t, run) => events.push({ date, order, t, seq: seq++, run });
     (state.debts || []).forEach((d) => {
       if (!D.isValid(d.asOf)) return;
       monthlyDatesIn(d.dueDay || 1, D.addDays(d.asOf, 1), untilIso).forEach((due) => {
-        events.push({ date: due, order: 0, t: 0, seq: seq++, run: () => dueDate(d, due) });
+        push(due, 0, 0, () => dueDate(d, due));
       });
     });
-    (state.paydays || []).forEach((pd) => {
-      if (pd.id === opts.excludePaydayId || !pd.plan || !Array.isArray(pd.plan.items)) return;
+    if (checkingFrom) {
+      (state.bills || []).forEach((b) => {
+        const amt = round2(Math.max(0, num(b.amount)));
+        if (!(amt > 0)) return;
+        const run = () => adjust('checking', -amt);
+        if (b.freq === 'yearly') {
+          for (let y = parts(checkingFrom)[0]; y <= parts(untilIso)[0]; y++) {
+            const due = clampedDate(y, b.dueMonth || 1, b.dueDay || 1);
+            if (due >= checkingFrom && due <= untilIso) push(due, 0, 0, run);
+          }
+        } else {
+          monthlyDatesIn(b.dueDay || 1, checkingFrom, untilIso).forEach((due) => push(due, 0, 0, run));
+        }
+      });
+    }
+    paydays.forEach((pd) => {
+      if (pd.date <= untilIso) push(pd.date, 3, num(pd.t), () => payIn(pd));
       pd.plan.items.forEach((it) => {
         if (!isTicked(pd, it.key) || !(it.amount > 0)) return;
+        if (it.kind !== 'debt' && it.kind !== 'save' && it.kind !== 'spend') return;
         const tk = pd.ticks[it.key];
         if (!D.isValid(tk.d)) return;
         // pullLaterTicks: a step already done after untilIso still counts (as of untilIso).
         if (tk.d > untilIso && !opts.pullLaterTicks) return;
         const at = minIso(tk.d, untilIso);
-        if (it.kind === 'debt') {
-          const d = byId[it.debtId];
-          if (!d || tk.d < d.asOf) return;
-          events.push({ date: at, order: 1, t: num(tk.t), seq: seq++, run: () => extra(d, at, it.amount) });
-        } else if (it.kind === 'save') {
-          if (tk.d < savingsAsOf) return;
-          events.push({ date: at, order: 1, t: num(tk.t), seq: seq++, run: () => save(at, it.amount) });
-        }
+        const t = num(tk.t);
+        push(at, after(at, t) ? 4 : 1, t, () => {
+          if (it.kind === 'debt') {
+            const d = byId[it.debtId];
+            if (d && !(tk.d < d.asOf)) extra(d, at, it.amount);
+          } else if (it.kind === 'save') {
+            if (tk.d >= savingsAsOf) save(at, it.amount);
+          }
+          adjust('checking', -round2(it.amount));
+        });
       });
     });
-    (state.checkins || []).forEach((c) => {
-      if (!D.isValid(c.date) || c.date > untilIso) return;
-      // Order 2: on the same day a check-in comes after ticks — its real number already includes them.
-      events.push({ date: c.date, order: 2, t: num(c.t), seq: seq++, run: () => checkin(c) });
+    purchases.forEach((p) => {
+      if (p.date > untilIso) return;
+      const t = num(p.t);
+      push(p.date, after(p.date, t) ? 5 : 2, t, () => spend(p));
+    });
+    checkins.forEach((c) => {
+      if (c.date > untilIso) return;
+      // On the same day a check-in comes after ticks — its real number already includes them.
+      const t = num(c.t);
+      push(c.date, after(c.date, t) ? 5 : 2, t, () => checkin(c));
     });
     events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) ||
       a.order - b.order || a.t - b.t || a.seq - b.seq);
@@ -322,7 +447,7 @@
         if (!r.paidOffOn) r.paidOffOn = date;
       }
     }
-    // Order 0: interest on the balance, then the minimum payment.
+    // Order 0: interest on the balance, then the minimum payment (it leaves checking).
     function dueDate(d, date) {
       const r = debts[d.id];
       if (r.balance <= EPS) return;
@@ -335,6 +460,7 @@
       if (paid > 0) {
         r.balance = round2(r.balance - paid);
         log.push({ date, type: 'min', debtId: d.id, amount: paid });
+        adjust('checking', -paid);
       }
       settle(d.id, date);
     }
@@ -347,7 +473,33 @@
     }
     function save(date, amount) {
       savings = round2(savings + amount);
+      savingsChanged = true;
       log.push({ date, type: 'save', amount: round2(amount) });
+    }
+    function payIn(pd) {
+      adjust('checking', round2(num(pd.amount)));
+      if (pot !== null && pd.date >= potStart) {
+        const amt = round2(Math.max(0, num(pd.plan.spend && pd.plan.spend.amount)));
+        refills.push({ paydayId: pd.id, date: pd.date, before: pot, amount: amt });
+        pot = round2(pot + amt);
+        potChanged = true;
+      }
+    }
+    function spend(p) {
+      const amt = round2(num(p.amount));
+      if (pot !== null) { pot = round2(pot - amt); potChanged = true; }
+      const pw = typeof p.paidWith === 'string' && p.paidWith ? p.paidWith : 'spending';
+      if (pw.indexOf('debt:') === 0) charge(pw.slice(5), p.date, amt);
+      else adjust(pw, -amt);
+    }
+    // Bought on a credit card (or any debt): it owes more, and a paid-off one is open again.
+    function charge(id, date, amount) {
+      const d = byId[id];
+      if (!d || date < d.asOf) return;
+      const r = debts[id];
+      r.balance = round2(r.balance + amount);
+      if (r.balance > EPS) r.paidOffOn = null;
+      log.push({ date, type: 'charge', debtId: id, amount });
     }
     function checkin(c) {
       Object.keys(c.debts || {}).forEach((id) => {
@@ -363,11 +515,28 @@
       if (c.savings !== null && c.savings !== undefined && Number.isFinite(Number(c.savings)) &&
           c.date >= savingsAsOf) {
         savings = round2(Math.max(0, Number(c.savings)));
+        savingsSetOn = c.date; savingsChanged = false;
         log.push({ date: c.date, type: 'checkin', amount: savings });
       }
+      Object.keys(c.accounts || {}).forEach((id) => {
+        if (!given(c.accounts[id])) return;
+        const v = round2(Number(c.accounts[id]));
+        if (id === 'spending') {
+          if (pot === null) return;
+          pot = v; potSetOn = c.date; potChanged = false;
+        } else if (acc[id]) {
+          Object.assign(acc[id], { balance: v, asOf: c.date, changed: false });
+        }
+      });
     }
 
-    return { debts, savings, log };
+    const accounts = {};
+    acctList.forEach((a) => {
+      if (a.kind === 'spending') accounts[a.id] = { balance: pot, asOf: potSetOn, changed: pot !== null && potChanged };
+      else if (a.kind === 'savings') accounts[a.id] = { balance: savings, asOf: savingsSetOn, changed: savingsChanged };
+      else accounts[a.id] = acc[a.id];
+    });
+    return { debts, savings, log, accounts, pot, potStart, refills };
   }
 
   // ---------------------------------------------------------------- stage & targets (§4.5)
@@ -1018,11 +1187,249 @@
     return out;
   }
 
-  function recap(state, today, ctx) {
+  // ---------------------------------------------------------------- spending pot, afford, where it went (§10.3–§10.6)
+
+  function latestPayday(state) {
+    const list = state.paydays || [];
+    return list.length ? list[list.length - 1] : null;
+  }
+  // Same daily rates makePlan uses.
+  function ratesFor(state) {
     const s = settingsOf(state);
+    const latest = latestPayday(state);
+    return spendingRates(state, s.payAmount != null ? s.payAmount : (latest ? num(latest.amount) : 0));
+  }
+  // Days from today through until − 1, split by rotation.
+  function daysUntil(s, today, until) {
+    if (!D.isValid(until)) return { daysLeft: null, home: 0, boat: 0, other: 0 };
+    const daysLeft = Math.max(0, D.diffDays(today, until));
+    const c = daysLeft > 0 ? rotation.countDays(s, today, D.addDays(until, -1)) : { home: 0, boat: 0, other: 0 };
+    return { daysLeft, home: c.home, boat: c.boat, other: c.other };
+  }
+  function needFor(days, rates) {
+    return round2(days.home * rates.homeDaily + days.boat * rates.boatDaily + days.other * rates.otherDaily);
+  }
+  // { left, perDay, perHome, perBoat } — per-day figures are null when no days are left.
+  function perFor(left, days, rates) {
+    const out = { left: left === null ? null : round2(left), perDay: null, perHome: null, perBoat: null };
+    if (left === null || !days.daysLeft) return out;
+    const L = Math.max(0, left);
+    const need = needFor(days, rates);
+    const avg = L / days.daysLeft;
+    const scale = need > 0 ? L / need : null;
+    out.perDay = round2(avg);
+    out.perHome = round2(scale === null ? avg : scale * rates.homeDaily);
+    out.perBoat = round2(scale === null ? avg : scale * rates.boatDaily);
+    return out;
+  }
+  // "about $71 a day" | "about $100 a day at home · $10 on the boat" | "less than $1 a day"
+  function dayText(per, days, m) {
+    const one = (x) => (x > 0 && x < 1 ? 'less than ' + m(1) : 'about ' + m(perDay(x)));
+    if (days.home > 0 && days.boat > 0 && per.perHome > 0 && per.perBoat > 0) {
+      return one(per.perHome) + ' a day at home · ' + m(perDay(per.perBoat)) + ' on the boat';
+    }
+    return one(per.perDay) + ' a day';
+  }
+
+  function paidWithName(state, pw) {
+    if (typeof pw === 'string' && pw.indexOf('debt:') === 0) {
+      const d = (state.debts || []).find((x) => x.id === pw.slice(5));
+      return d ? d.name : 'A card you removed';
+    }
+    const a = accountsOf(state).find((x) => x.id === (pw || 'spending'));
+    return a ? a.name : 'An account you removed';
+  }
+  function decoratePurchase(state, p) {
+    const c = CAT[p.category] || CAT.other;
+    return Object.assign({}, p, { label: c.label, emoji: c.emoji, paidWithName: paidWithName(state, p.paidWith) });
+  }
+  const newestFirst = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : num(b.t) - num(a.t));
+  const placeKey = (w) => String(w || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+  function spending(state, today, opts, bal) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    const m = (opts && opts.money) || money;
+    const s = settingsOf(state);
+    bal = bal || replay(state, today);
+    const latest = latestPayday(state);
+    const started = bal.pot !== null;
+    const left = started ? round2(bal.pot) : null;
+    const until = latest ? latest.nextDate : null;
+    const rates = ratesFor(state);
+    const days = daysUntil(s, today, until);
+    const per = perFor(left, days, rates);
+    const need = days.daysLeft ? needFor(days, rates) : 0;
+
+    let status = null, sub = null, overText = null;
+    if (started) {
+      status = left < -EPS ? 'over' : (need > 0 && left < 0.5 * need ? 'low' : 'ok');
+      if (status === 'over') overText = 'You\'re ' + m(-left) + ' over. No stress — it comes out of your next spending money.';
+      if (until) {
+        if (days.daysLeft === 0) sub = 'Payday\'s due — this is what\'s left until it lands.';
+        else if (left <= EPS) sub = 'Your next spending money comes with payday on ' + D.fmtShort(until) + '.';
+        else sub = dayText(per, days, m) + ' until ' + D.fmtShort(until);
+      }
+    }
+    let carried = null;
+    if (started && latest) {
+      const r = bal.refills.find((x) => x.paydayId === latest.id);
+      if (r) carried = round2(r.before);
+    }
+
+    const all = (state.purchases || []).filter((p) => p && D.isValid(p.date)).slice().sort(newestFirst);
+    const recent = all.filter((p) => p.date <= today).slice(0, 30).map((p) => decoratePurchase(state, p));
+    const placeMap = new Map();
+    all.forEach((p) => {          // newest first: the first one seen is the latest spelling
+      const k = placeKey(p.where);
+      if (!k) return;
+      const x = placeMap.get(k);
+      if (x) x.count++;
+      else placeMap.set(k, { where: p.where, category: p.category, paidWith: p.paidWith, count: 1, order: placeMap.size });
+    });
+    const places = Array.from(placeMap.values()).sort((a, b) => b.count - a.count || a.order - b.order)
+      .slice(0, 50).map((x) => ({ where: x.where, category: x.category, paidWith: x.paidWith, count: x.count }));
+
+    return {
+      started, left,
+      from: latest ? latest.date : null, until,
+      daysLeft: days.daysLeft, homeDays: days.home, boatDays: days.boat, otherDays: days.other,
+      perDay: per.perDay, perHome: per.perHome, perBoat: per.perBoat,
+      need, sub, status, overText, carried, potStart: bal.potStart,
+      recent, places,
+    };
+  }
+
+  function afford(state, today, price, opts, bal) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    const m = (opts && opts.money) || money;
+    const s = settingsOf(state);
+    bal = bal || replay(state, today);
+    price = Math.max(0, round2(num(price)));
+    const latest = latestPayday(state);
+    const rates = ratesFor(state);
+    const until = latest ? latest.nextDate : D.addDays(today, pay.intervalDays(s));
+    const days = daysUntil(s, today, until);
+    const need = days.daysLeft ? needFor(days, rates) : 0;
+    const started = bal.pot !== null;
+    let left;
+    if (started) left = round2(bal.pot);
+    else if (latest) left = round2(Math.max(0, num(latest.plan && latest.plan.spend && latest.plan.spend.amount)));
+    else left = need;                                    // no payday yet: a normal stretch of spending
+    const afterLeft = round2(left - price);
+    const before = perFor(left, days, rates);
+    const aft = perFor(afterLeft, days, rates);
+    const hasDays = days.daysLeft > 0;
+    const paydayBit = until > today ? 'payday on ' + D.fmtShort(until) : 'your paycheck lands';
+    let verdict, headline, sub;
+    if (afterLeft < -EPS) {
+      verdict = 'wait';
+      headline = left > EPS
+        ? 'That\'s more than you\'ve got left (' + m(left) + '). Maybe wait until ' + paydayBit + '.'
+        : 'This payday\'s spending money is used up. Maybe wait until ' + paydayBit + '.';
+      sub = until > today ? 'Your next spending money comes ' + D.fmtShort(until) + '.' : '';
+    } else {
+      if (need <= 0 || afterLeft >= 0.85 * need) {
+        verdict = 'ok';
+        headline = hasDays ? 'Go for it — you\'d still have ' + dayText(aft, days, m) + '.'
+          : 'Go for it — you\'d still have ' + m(afterLeft) + ' left.';
+      } else if (afterLeft >= 0.5 * need) {
+        verdict = 'tight';
+        headline = 'You can, but the rest of the days get tighter: ' + dayText(aft, days, m) + '.';
+      } else {
+        verdict = 'wait';
+        headline = 'That would leave ' + dayText(aft, days, m) + ' until ' + D.fmtShort(until) +
+          '. Maybe wait, or find a cheaper option.';
+      }
+      sub = 'That leaves ' + m(afterLeft) + (until > today ? ' until ' + D.fmtShort(until) : '') + '.';
+    }
+    if (!started) sub = (sub ? sub + ' ' : '') + 'Log your purchases for a sharper answer.';
+    return { verdict, headline, sub, before, after: aft, price, started, until, daysLeft: days.daysLeft };
+  }
+
+  function whereItWent(state, fromIso, toIso) {
+    const list = (state.purchases || []).filter((p) => p && D.isValid(p.date) && num(p.amount) > 0 &&
+      (!fromIso || p.date >= fromIso) && (!toIso || p.date <= toIso)).slice().sort(newestFirst);
+    const places = new Map(), cats = new Map();
+    list.forEach((p) => {
+      const amt = round2(num(p.amount));
+      const k = placeKey(p.where) || '—';
+      const x = places.get(k) || { where: p.where || 'Somewhere', total: 0, count: 0 };
+      x.total = round2(x.total + amt); x.count++;
+      places.set(k, x);
+      const c = CAT[p.category] || CAT.other;
+      const y = cats.get(c.key) || { category: c.key, label: c.label, emoji: c.emoji, total: 0, count: 0 };
+      y.total = round2(y.total + amt); y.count++;
+      cats.set(c.key, y);
+    });
+    const byTotal = (a, b) => b.total - a.total || b.count - a.count;
+    return {
+      total: sum(list, (p) => num(p.amount)), count: list.length,
+      byPlace: Array.from(places.values()).sort(byTotal),
+      byCategory: Array.from(cats.values()).sort(byTotal),
+    };
+  }
+
+  // The stretch that just ended (boat or home), when it's a real in-rotation stretch.
+  function endedStretch(s, today) {
     const st = rotation.status(s, today);
-    if (!st || st.beforeStart || st.where !== 'home') return null;
-    const last = rotation.lastBoatStretch(s, today);
+    if (!st || st.beforeStart) return null;
+    const { off } = rot(s);
+    if (st.where === 'home') {
+      const last = rotation.lastBoatStretch(s, today);
+      return last ? { where: 'boat', start: last.start, end: last.end } : null;
+    }
+    const start = D.addDays(st.stretchStart, -off);
+    if (start >= s.boatDate) return { where: 'home', start, end: D.addDays(st.stretchStart, -1) };
+    // First boat stretch after the boat date was moved later while home.
+    if (st.stretchStart === s.boatDate && D.isValid(s.homeSince) && s.homeSince < s.boatDate) {
+      return { where: 'home', start: s.homeSince, end: D.addDays(s.boatDate, -1), unusual: true };
+    }
+    return null;
+  }
+  // The same kind of stretch one full rotation earlier (only once logging had started by then).
+  function previousSameKind(s, stretch, potStart) {
+    if (!stretch || stretch.unusual || !hasBoat(s)) return null;
+    const { on, off, cycle } = rot(s);
+    const start = D.addDays(stretch.start, -cycle);
+    if (start < s.boatDate || !potStart || potStart > start) return null;
+    return { where: stretch.where, start, end: D.addDays(start, (stretch.where === 'boat' ? on : off) - 1) };
+  }
+  function compareText(diff, m) {
+    if (Math.abs(diff) < 0.5) return 'About the same as last time';
+    return diff < 0 ? m(-diff) + ' less than last time 🎉' : m(diff) + ' more than last time';
+  }
+
+  function stretchSpending(state, today, bal) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    const s = settingsOf(state);
+    const potStart = (bal || replay(state, today)).potStart;
+    const fallbackStart = minIso(potStart || state.createdAt || today, today);
+    const wrap = (x) => (x ? Object.assign({}, x, { summary: whereItWent(state, x.start, x.end) }) : null);
+    const st = rotation.status(s, today);
+    if (st) {
+      if (st.beforeStart) {
+        const start = st.stretchStart || (st.day ? D.addDays(today, -(st.day - 1)) : fallbackStart);
+        return { current: wrap({ where: 'home', start: minIso(start, today), end: today }), previous: null };
+      }
+      const cur = { where: st.where, start: st.stretchStart, end: today };
+      return { current: wrap(cur), previous: wrap(previousSameKind(s, cur, potStart)) };
+    }
+    // No boat date: this pay period vs the one before.
+    const pds = (state.paydays || []).filter((p) => p.date <= today);
+    if (!pds.length) return { current: wrap({ where: 'pay', start: fallbackStart, end: today }), previous: null };
+    const latest = pds[pds.length - 1];
+    let prevDate = null;
+    for (let i = pds.length - 2; i >= 0; i--) { if (pds[i].date < latest.date) { prevDate = pds[i].date; break; } }
+    const previous = prevDate && potStart && potStart <= prevDate
+      ? { where: 'pay', start: prevDate, end: D.addDays(latest.date, -1) } : null;
+    return { current: wrap({ where: 'pay', start: latest.date, end: today }), previous: wrap(previous) };
+  }
+
+  // Welcome-home / back-out-to-sea recap for the stretch that just ended (§4.10, §10.6).
+  function recap(state, today, ctx, m) {
+    m = m || money;
+    const s = settingsOf(state);
+    const last = endedStretch(s, today);
     if (!last || last.end < (state.createdAt || '')) return null;
     const shown = state.meta && state.meta.recapsShown;
     if (shown && shown[last.start]) return null;
@@ -1031,15 +1438,35 @@
     const debtPaid = sum(log.filter((e) => e.type === 'min' || e.type === 'extra'), (e) => e.amount);
     const saved = sum(log.filter((e) => e.type === 'save'), (e) => e.amount);
     const pds = (state.paydays || []).filter((p) => inside(p.date));
-    if (!pds.length && debtPaid <= 0) return { key: last.start, empty: true };
+    const spent = whereItWent(state, last.start, last.end);
+    if (!pds.length && debtPaid <= 0 && spent.count === 0) return { key: last.start, empty: true };
     let ticked = 0, total = 0;
     pds.forEach((p) => (p.plan.items || []).forEach((it) => {
       if (!(it.amount > 0)) return;
       total++; if (isTicked(p, it.key)) ticked++;
     }));
     const paidOff = ctx.debts.filter((d) => d.paidOffOn && inside(d.paidOffOn)).map((d) => d.name);
-    return { key: last.start, start: last.start, end: last.end, debtPaid, saved, paidOff,
-      paydays: pds.length, ticked, total };
+    let compare = null;
+    const prev = spent.count > 0 ? previousSameKind(s, last, ctx.balances.potStart) : null;
+    if (prev) {
+      const previousTotal = whereItWent(state, prev.start, prev.end).total;
+      const diff = round2(spent.total - previousTotal);
+      compare = { previousTotal, diff, text: compareText(diff, m), start: prev.start, end: prev.end };
+    }
+    return { key: last.start, where: last.where,
+      title: last.where === 'boat' ? 'Welcome home!' : 'Back out to sea ⚓',
+      start: last.start, end: last.end, debtPaid, saved, paidOff,
+      paydays: pds.length, ticked, total, spent, compare };
+  }
+
+  function accountsList(state, today, bal) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    bal = bal || replay(state, today);
+    return accountsOf(state).map((a) => {
+      const r = bal.accounts[a.id] || { balance: null, asOf: null, changed: false };
+      return { id: a.id, name: a.name, kind: a.kind, balance: r.balance, asOf: r.asOf,
+        estimated: r.balance !== null && !!r.changed, builtIn: a.builtIn };
+    });
   }
 
   function snoozed(until, today) { return D.isValid(until) && today < until; }
@@ -1121,7 +1548,10 @@
       nextPayday: latest ? latest.nextDate : null,
       streak: streak(state),
       newMilestones: milestones(state, today, opts, ctx).filter((x) => !celebrated[x.key]),
-      recap: recap(state, today, ctx),
+      recap: recap(state, today, ctx, m),
+      spending: spending(state, today, opts, ctx.balances),
+      accounts: accountsList(state, today, ctx.balances),
+      stretch: stretchSpending(state, today, ctx.balances),
       checkinDue: checkinDue(state, today, ctx),
       backupDue: backupDue(state, today),
     };
@@ -1131,7 +1561,7 @@
 
   function newState(today) {
     return {
-      schema: 1, app: 'harbor', createdAt: today, setupDone: false,
+      schema: SCHEMA, app: 'harbor', createdAt: today, setupDone: false,
       settings: {
         currency: 'USD', currencySymbol: null, boatDate: null, onDays: 28, offDays: 14,
         payAmount: null, payFreq: null, homeSpend: null, boatSpend: null, homeSince: null,
@@ -1140,6 +1570,8 @@
       bills: [], debts: [],
       savings: { amount: 0, asOf: today },
       paydays: [], checkins: [],
+      accounts: BUILTIN_ACCOUNTS.map((a) => Object.assign({}, a)),
+      purchases: [],
       meta: { lastBackupAt: null, backupSnoozeUntil: null, checkinSnoozeUntil: null, celebrated: {}, recapsShown: {}, tips: {} },
     };
   }
@@ -1158,9 +1590,9 @@
     try {
       if (!isObj(obj)) return fail('That doesn\'t look like Harbor data.');
       if (obj.app !== 'harbor') return fail('That doesn\'t look like Harbor data.');
-      if (Number(obj.schema) > 1) return fail('This was made by a newer version of Harbor.');
+      if (Number(obj.schema) > SCHEMA) return fail('This was made by a newer version of Harbor.');
       if (!isObj(obj.settings)) return fail('Some Harbor data is missing (settings).');
-      for (const k of ['bills', 'debts', 'paydays', 'checkins']) {
+      for (const k of ['bills', 'debts', 'paydays', 'checkins', 'accounts', 'purchases']) {
         if (obj[k] !== undefined && !Array.isArray(obj[k])) return fail('Some Harbor data is damaged (' + k + ').');
       }
       today = D.isValid(today) ? today : D.todayLocal();
@@ -1219,15 +1651,45 @@
             yearlyAside: Array.isArray(p.plan.yearlyAside) ? p.plan.yearlyAside.filter(isObj) : [],
             window: isObj(p.plan.window) ? p.plan.window : {},
           });
-          return { id: idOf(p.id), date: p.date, amount: round2(Number(p.amount)), nextDate: p.nextDate, plan, ticks };
+          const out = { id: idOf(p.id), date: p.date, amount: round2(Number(p.amount)), nextDate: p.nextDate, plan, ticks };
+          if (given(p.t)) out.t = Number(p.t);
+          return out;
         })
         .map((p, idx) => [p, idx]).sort((a, b) => (a[0].date < b[0].date ? -1 : a[0].date > b[0].date ? 1 : a[1] - b[1]))
         .map((x) => x[0]);
       st.checkins = (obj.checkins || []).filter((c) => isObj(c) && D.isValid(c.date)).map((c) => {
         const debts = {};
         if (isObj(c.debts)) Object.keys(c.debts).forEach((k) => { const v = posNumOrNull(c.debts[k]); if (v != null) debts[k] = v; });
-        return { id: idOf(c.id), date: c.date, t: num(c.t), debts, savings: posNumOrNull(c.savings) };
+        const accounts = {};
+        if (isObj(c.accounts)) Object.keys(c.accounts).forEach((k) => { if (given(c.accounts[k])) accounts[k] = round2(Number(c.accounts[k])); });
+        let savings = posNumOrNull(c.savings);
+        if ('savings' in accounts) {                 // savings always lives in .savings
+          if (savings == null && accounts.savings >= 0) savings = accounts.savings;
+          delete accounts.savings;
+        }
+        return { id: idOf(c.id), date: c.date, t: num(c.t), debts, savings, accounts };
       });
+      // Schema 2: accounts (built-ins always there) and purchases. Schema 1 simply has none yet.
+      const rawAccts = (obj.accounts || []).filter(isObj);
+      const acctSeen = Object.assign({}, BUILTIN_IDS);
+      st.accounts = BUILTIN_ACCOUNTS.map((b) => {
+        const f = rawAccts.find((a) => a.id === b.id);
+        return { id: b.id, name: (f && cleanText(f.name, 40)) || b.name, kind: b.kind };
+      });
+      rawAccts.forEach((a) => {
+        if (BUILTIN_IDS[a.id]) return;
+        let id = typeof a.id === 'string' && a.id && a.id.indexOf('debt:') !== 0 ? a.id : uid();
+        while (acctSeen[id]) id = uid();
+        acctSeen[id] = true;
+        st.accounts.push({ id, name: cleanText(a.name, 40) || 'Account', kind: a.kind === 'cash' ? 'cash' : 'other' });
+      });
+      st.purchases = sortedPurchases((obj.purchases || []).filter((p) => isObj(p) && D.isValid(p.date) &&
+        given(p.amount) && round2(Number(p.amount)) > 0).map((p) => {
+        const category = CAT[p.category] ? p.category : 'other';
+        return { id: idOf(p.id), date: p.date, t: num(p.t), amount: round2(Number(p.amount)),
+          where: cleanText(p.where, 60) || CAT[category].label, what: cleanText(p.what, 80), category,
+          paidWith: typeof p.paidWith === 'string' && p.paidWith ? p.paidWith : 'spending' };
+      }));
       const mt = isObj(obj.meta) ? obj.meta : {};
       st.meta = {
         lastBackupAt: D.isValid(mt.lastBackupAt) ? mt.lastBackupAt : null,
@@ -1247,7 +1709,7 @@
     const data = JSON.parse(JSON.stringify(state));
     // The file records its own backup date, so restoring it doesn't ask for a backup right away.
     if (isObj(data.meta)) { data.meta.lastBackupAt = today; data.meta.backupSnoozeUntil = null; }
-    return { app: 'harbor', schema: 1, exportedAt: today, data };
+    return { app: 'harbor', schema: SCHEMA, exportedAt: today, data };
   }
 
   function readBackup(obj, today) {
@@ -1283,6 +1745,36 @@
     state.paydays.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : idx.get(a) - idx.get(b)));
   }
 
+  function sortedPurchases(list) {
+    return list.map((p, i) => [p, i]).sort((a, b) => (a[0].date < b[0].date ? -1 : a[0].date > b[0].date ? 1 : 0) ||
+      num(a[0].t) - num(b[0].t) || a[1] - b[1]).map((x) => x[0]);
+  }
+  function ensureV2(state) {
+    if (!Array.isArray(state.purchases)) state.purchases = [];
+    if (!Array.isArray(state.accounts)) state.accounts = [];
+    BUILTIN_ACCOUNTS.forEach((b, i) => {
+      if (!state.accounts.some((a) => a && a.id === b.id)) state.accounts.splice(i, 0, Object.assign({}, b));
+    });
+  }
+  function validPaidWith(state, pw) {
+    if (typeof pw !== 'string' || !pw) return 'spending';
+    if (pw.indexOf('debt:') === 0) return (state.debts || []).some((d) => d.id === pw.slice(5)) ? pw : 'spending';
+    const a = accountsOf(state).find((x) => x.id === pw);
+    return a && a.kind !== 'savings' ? pw : 'spending';
+  }
+  // Friendly checks for a purchase. `keep` = the purchase being edited (its paid-with may be a removed account).
+  function cleanPurchase(state, input, today, keep) {
+    if (!given(input.amount) || !(round2(Number(input.amount)) > 0)) throw new Error('Type how much it cost.');
+    const amount = round2(Number(input.amount));
+    const date = input.date == null || input.date === '' ? today : input.date;
+    if (!D.isValid(date)) throw new Error('Pick the day you bought it.');
+    if (date > today) throw new Error('That day hasn\'t happened yet. Pick today or an earlier day.');
+    const category = CAT[input.category] ? input.category : 'other';
+    const paidWith = keep && input.paidWith === keep.paidWith ? keep.paidWith : validPaidWith(state, input.paidWith);
+    return { date, amount, where: cleanText(input.where, 60) || CAT[category].label,
+      what: cleanText(input.what, 80), category, paidWith };
+  }
+
   const act = {
     addPayday(state, input, now, opts) {
       checkPaydayInput(input);
@@ -1290,7 +1782,7 @@
       if (latest && input.date < latest.date) throw new Error('This payday is before your last one.');
       const nextDate = input.nextDate || pay.guessNext(state.settings, input.date);
       const plan = makePlan(state, { date: input.date, amount: input.amount, nextDate }, opts);
-      const pd = { id: uid(), date: input.date, amount: plan.amount, nextDate, plan, ticks: {} };
+      const pd = { id: uid(), date: input.date, amount: plan.amount, nextDate, plan, ticks: {}, t: nowOr(now).t };
       state.paydays.push(pd);
       sortPaydays(state);
       return pd;
@@ -1332,6 +1824,7 @@
     },
 
     addCheckin(state, input, now) {
+      ensureV2(state);
       const n = nowOr(now);
       const debts = {};
       Object.keys((input && input.debts) || {}).forEach((k) => {
@@ -1341,8 +1834,77 @@
       const sv = input && input.savings;
       const savings = sv !== null && sv !== undefined && sv !== '' && Number.isFinite(Number(sv)) && Number(sv) >= 0
         ? round2(Number(sv)) : null;
-      state.checkins.push({ id: uid(), date: n.d, t: n.t, debts, savings });
+      let sav = savings;
+      const accounts = {};
+      const known = accountsOf(state);
+      Object.keys((input && input.accounts) || {}).forEach((k) => {
+        const v = input.accounts[k];
+        if (!given(v)) return;
+        if (k === 'savings') { if (sav === null && Number(v) >= 0) sav = round2(Number(v)); return; }
+        if (known.some((a) => a.id === k)) accounts[k] = round2(Number(v));
+      });
+      state.checkins.push({ id: uid(), date: n.d, t: n.t, debts, savings: sav, accounts });
       return state;
+    },
+
+    // ------------------------------------------------ purchases & accounts (§10.8)
+
+    addPurchase(state, input, now) {
+      ensureV2(state);
+      const n = nowOr(now);
+      const p = Object.assign({ id: uid(), t: n.t }, cleanPurchase(state, input || {}, n.d));
+      state.purchases.push(p);
+      state.purchases = sortedPurchases(state.purchases);
+      return p;
+    },
+    editPurchase(state, id, fields, now) {
+      ensureV2(state);
+      const p = state.purchases.find((x) => x.id === id);
+      if (!p) throw new Error('That purchase is gone.');
+      const n = nowOr(now);
+      Object.assign(p, cleanPurchase(state, Object.assign({}, p, fields || {}), maxIso(n.d, p.date), p));
+      state.purchases = sortedPurchases(state.purchases);
+      return state;
+    },
+    deletePurchase(state, id) {
+      ensureV2(state);
+      state.purchases = state.purchases.filter((x) => x.id !== id);
+      return state;
+    },
+    addAccount(state, input) {
+      ensureV2(state);
+      const name = cleanText(input && input.name, 40);
+      if (!name) throw new Error('Give it a name, like "Cash".');
+      let id = uid();
+      while (state.accounts.some((a) => a.id === id)) id = uid();
+      const a = { id, name, kind: input && input.kind === 'cash' ? 'cash' : 'other' };
+      state.accounts.push(a);
+      return a;
+    },
+    renameAccount(state, id, name) {
+      ensureV2(state);
+      const a = state.accounts.find((x) => x && x.id === id);
+      if (!a) throw new Error('That account is gone.');
+      const clean = cleanText(name, 40);
+      if (!clean) throw new Error('Give it a name.');
+      a.name = clean;
+      return state;
+    },
+    // Purchases that used it keep their record but stop changing any balance.
+    deleteAccount(state, id) {
+      ensureV2(state);
+      if (BUILTIN_IDS[id]) throw new Error('Checking, Spending card and Savings always stay. You can rename them.');
+      state.accounts = state.accounts.filter((x) => x && x.id !== id);
+      return state;
+    },
+    setAccountBalance(state, id, amount, now) {
+      if (!given(amount)) throw new Error('Type an amount.');
+      if (id === 'savings') {
+        if (Number(amount) < 0) throw new Error('Savings can\'t be below zero.');
+        return act.setSavings(state, amount, now);
+      }
+      if (!accountsOf(state).some((a) => a.id === id)) throw new Error('That account is gone.');
+      return act.addCheckin(state, { debts: {}, savings: null, accounts: { [id]: amount } }, now);
     },
 
     // today (optional): when the new date is later and you're home, remember when you got home
@@ -1386,15 +1948,21 @@
   };
 
   return {
-    version: '1.0.0',
+    version: '2.0.0', SCHEMA,
     round2, roundTo, money, uid,
     dates, rotation, pay,
     replay, monthlyBills, monthlySpend, safetyTarget, stage, stageName: (n) => STAGE_NAMES[n],
     STAGE_NAMES, orderDebts,
     suggestSpending, makePlan, project, summary,
+    CATEGORIES, BUILTIN_ACCOUNTS,
+    spending: (state, today, opts) => spending(state, today, opts),
+    afford: (state, today, price, opts) => afford(state, today, price, opts),
+    whereItWent, stretchSpending: (state, today) => stretchSpending(state, today),
+    accounts: (state, today) => accountsList(state, today),
     streak, milestones, isComplete,
     newState, normalizeState, makeBackup, readBackup,
     act,
-    internal: { monthlySpendOf, goalsWaterfall, splitMoney, spendingRates, simulateMins, monthlyDatesIn, nextYearly },
+    internal: { monthlySpendOf, goalsWaterfall, splitMoney, spendingRates, simulateMins, monthlyDatesIn, nextYearly,
+      accountsOf, endedStretch, previousSameKind, ratesFor },
   };
 });
