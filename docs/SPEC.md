@@ -566,6 +566,10 @@ check-in comes after same-day **ticks**; purchases follow real time order relati
   (or that purchase/check-in date when no payday precedes it). Pot = 0 at potStart, then: each payday on/after potStart
   → `+= plan.spend.amount`; **every** purchase (whatever paid with it) → `−= amount`; check-in `accounts.spending` →
   set. Leftovers and overspending roll over. Never logged and never set → `pot: null`.
+  - **First log mid-pay-period (app):** when the very first purchase starts the pot and `potStart` is earlier than that
+    purchase's date, the app right away asks once "What's on your spending card right now?" (money field, skippable
+    with "Skip — use my plan"). An answer becomes an `accounts.spending` check-in now, so the pot starts from the real
+    balance instead of assuming nothing was spent since payday.
 - **Purchase paid with `debt:<id>`** → also that debt's balance `+= amount` (skip if purchase date < debt.asOf),
   re-opens a paid-off debt (`paidOffOn = null`), log type `'charge'`. Payday plans then pay it back automatically.
 - Undo/edit payday and edit/delete purchase all flow through replay — nothing is stored pre-computed.

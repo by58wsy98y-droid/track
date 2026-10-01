@@ -1230,6 +1230,7 @@
         const date = $('pu-date').value || t;
         const input = { date: date, amount: amount, where: $('pu-where').value, what: $('pu-what').value, category: cat || 'other', paidWith: pw };
         let added = null;
+        const wasStarted = !p && summary().spending.started;
         try {
           if (p) E.act.editPurchase(state, p.id, input, now());
           else added = E.act.addPurchase(state, input, now());
@@ -1243,11 +1244,18 @@
         const sp = summary().spending;
         let msg = 'Logged ✓';
         if (sp.started && sp.until) {
-          msg += sp.left < 0 ? ' You\'re ' + money(-sp.left) + ' over — no stress, it comes out of next payday.'
-            : ' ' + money(sp.left) + ' left' + (perDayShort(sp) ? ' · ' + perDayShort(sp) : '') + '.';
+          msg += sp.left < 0 ? ' ' + money(-sp.left) + ' over — no stress.' : ' ' + money(sp.left) + ' left';
         }
-        if (isDebtPay(added.paidWith)) msg += ' Added to your ' + debtName(added.paidWith) + ' balance.';
-        toast(msg, 4200);
+        if (isDebtPay(added.paidWith)) msg += ' · added to ' + debtName(added.paidWith);
+        // First log mid-pay-period: the pot would assume nothing was spent since payday, so ask once (§10.2).
+        if (!wasStarted && sp.started && sp.potStart && sp.potStart < added.date) {
+          openMoneySheet({ title: 'Logged ✓ One quick question', label: 'What\'s on your spending card right now?',
+            lead: 'You\'ve probably spent some since payday. Open your bank app and type what it says, so we start from the real number.',
+            value: null, example: '250', skip: 'Skip — use my plan',
+            save: function (n) { E.act.setAccountBalance(state, 'spending', n, now()); } });
+          return;
+        }
+        toast(msg, 2600);
       },
     });
     // Picking a place you've used before fills in its usual kind and card.
@@ -1935,8 +1943,10 @@
     const html = sheetHead(o.title, domId('m')) + (o.lead ? '<p class="sheet-lead">' + esc(o.lead) + '</p>' : '') +
       '<form data-lsubmit novalidate autocomplete="off"><label class="field"><span class="field-label">' + esc(o.label) + '</span>' +
       moneyField('m-val', o.value, { big: true, placeholder: o.placeholder }) + (o.help ? '<span class="field-help">' + esc(o.help) + '</span>' : '') + '</label>' +
-      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div></form>';
+      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button>' +
+      (o.skip ? '<button type="button" class="btn btn-text" data-la="skip">' + esc(o.skip) + '</button>' : '') + '</div></form>';
     openLayer(html, {
+      actions: { skip: function (el, entry) { closeLayer(entry); } },
       onSubmit: function (form, entry) {
         clearErrors(entry.box);
         const n = parseMoney($('m-val').value);
@@ -2027,8 +2037,10 @@
     const html = sheetHead('Full safety net', domId('mo')) +
       '<p class="sheet-lead">Once you\'re debt-free, savings grow until they cover this many months of bills and spending.</p>' +
       '<form data-lsubmit novalidate><label class="field"><span class="field-label">How many months?</span><select class="select" id="mo-val">' + opts + '</select></label>' +
-      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div></form>';
+      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button>' +
+      (o.skip ? '<button type="button" class="btn btn-text" data-la="skip">' + esc(o.skip) + '</button>' : '') + '</div></form>';
     openLayer(html, {
+      actions: { skip: function (el, entry) { closeLayer(entry); } },
       onSubmit: function (form, entry) {
         state.settings.safetyMonths = parseInt($('mo-val').value, 10) || 3;
         save(); closeLayer(entry); render(); toast('Saved.');

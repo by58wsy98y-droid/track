@@ -10,6 +10,14 @@ After a 5-minute setup you only ever do two things:
 
 Everything else (bills, spending money, which debt to pay, savings, your debt-free date) is worked out for you.
 
+**Optional — the Money tab:**
+- **Log a purchase** (what, where, how much, paid with) and watch **Left to spend** drop right away, with
+  "about $X a day until payday". Leftovers and overspending roll over to the next payday.
+- **Can I afford it?** Type a price before you buy and see what your money per day would become.
+- **Where it went:** your top places and kinds of spending this stretch, compared with your last stretch of the same kind.
+- **Accounts:** type in your checking, spending card and savings balances (and any others) whenever you like.
+  A purchase put on a credit card is added to that card's balance, and your next payday plan pays it back.
+
 ## Open it
 
 **https://by58wsy98y-droid.github.io/track/**

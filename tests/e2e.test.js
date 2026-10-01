@@ -575,7 +575,7 @@ async function runMoney(browser, srv, deviceName) {
     await page.click('.layer .cat[data-v=delivery]');
     assert.equal(await page.getAttribute('.layer [data-la=pw][data-v=spending]', 'aria-pressed'), 'true', 'spending card is the default');
     await submitLayer();
-    assert.match(await toastText(), /^Logged ✓ \$912 left · about /);
+    assert.equal(await toastText(), 'Logged ✓ $912 left');
     assert.equal(await spendAmt(), '$912');
 
     // ------------------------------------------------------------ 3. log more from Today (one on the Visa)
@@ -599,7 +599,7 @@ async function runMoney(browser, srv, deviceName) {
     await page.click('.layer [data-la=pw][data-v="debt:visa"]');
     assert.match(await page.textContent('#pu-pw-help'), /Adds to what you owe on Visa/);
     await submitLayer();
-    assert.match(await toastText(), /^Logged ✓ \$740 left · .*Added to your Visa balance\.$/);
+    assert.equal(await toastText(), 'Logged ✓ $740 left · added to Visa');
     assert.equal(await spendAmt(), '$740');
     // A known place fills in its kind and card.
     await page.click('.spend-card [data-action=logPurchase]');
