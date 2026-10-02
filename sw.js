@@ -11,7 +11,7 @@
  * All paths are relative so the app works from a sub-path (e.g. /track/).
  * User data lives in localStorage, never in this cache.
  */
-const VERSION = 'harbor-v3';
+const VERSION = 'harbor-v4';
 
 const APP_FILES = [
   './',

@@ -1255,8 +1255,8 @@
       '<button type="button" class="chip' + (cur.date === t ? ' is-on' : '') + '" data-la="day" data-v="' + t + '" aria-pressed="' + (cur.date === t) + '">Today</button>' +
       '<button type="button" class="chip' + (cur.date === yest ? ' is-on' : '') + '" data-la="day" data-v="' + yest + '" aria-pressed="' + (cur.date === yest) + '">Yesterday</button>' +
       '<input class="input input-date" type="date" id="pu-date" aria-labelledby="pu-date-l" value="' + esc(cur.date) + '" max="' + (p && p.date > t ? p.date : t) + '"></div></div>' +
-      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">' + (p ? 'Save' : 'Log it') + '</button></div>' +
-      (p ? '<button type="button" class="btn btn-text" data-la="del" style="color:var(--coral-ink);margin-top:14px">Delete this purchase</button>' : '') + '</form>';
+      '<div class="sheet-actions' + (p ? ' has-del' : '') + '"><button type="submit" class="btn btn-primary">' + (p ? 'Save' : 'Log it') + '</button>' +
+      (p ? '<button type="button" class="btn btn-danger btn-del" data-la="del" aria-label="Delete this purchase">Delete</button>' : '') + '</div></form>';
 
     const press = function (box, la, v) {
       box.querySelectorAll('[data-la="' + la + '"]').forEach(function (x) {
@@ -1396,8 +1396,8 @@
       moneyField('ac-bal', null, { big: true }) +
       (guess ? '<span class="field-help">' + esc(guess) + '</span>' : '') + '</label>' +
       '<label class="field"><span class="field-label">Name</span><input class="input" id="ac-name" maxlength="40" autocapitalize="words" value="' + esc(a.name) + '"></label>' +
-      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div>' +
-      (a.builtIn ? '' : '<button type="button" class="btn btn-text" data-la="del" style="color:var(--coral-ink);margin-top:14px">Remove this account</button>') + '</form>';
+      '<div class="sheet-actions' + (!a.builtIn ? ' has-del' : '') + '"><button type="submit" class="btn btn-primary">' + 'Save' + '</button>' +
+      (!a.builtIn ? '<button type="button" class="btn btn-danger btn-del" data-la="del" aria-label="Remove this account">Remove</button>' : '') + '</div></form>';
     openLayer(html, {
       actions: {
         del: function (el, entry) {
@@ -1466,6 +1466,7 @@
     if (!d) return;
     openMoneySheet({ title: d.name, label: 'How much is left on it now?', lead: 'Open your bank app and type what it says.',
       value: null, help: 'We think it\'s ' + money(d.balance) + '.', example: '1200',
+      more: { label: 'Edit or delete this debt', fn: function () { openDebtSheet(d.id); } },
       save: function (n) { E.act.setDebtBalance(state, d.id, n, now()); } });
   }
 
@@ -1830,8 +1831,8 @@
       '<div class="due-row"><select class="select" id="b-month" aria-label="Month"' + (yearly ? '' : ' hidden') + '>' + monthOptions(cur.dueMonth || 1) + '</select>' +
       '<select class="select" id="b-day" aria-label="Day">' + dayOptions(cur.dueDay || 1) + '</select></div>' +
       '<span class="field-help" id="b-help">' + (yearly ? 'We\'ll set a little aside each payday, so it\'s ready when it\'s due.' : '') + '</span></div>' +
-      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div>' +
-      (b ? '<button type="button" class="btn btn-text" data-la="del" style="color:var(--coral-ink);margin-top:14px">Delete this bill</button>' : '') + '</form>';
+      '<div class="sheet-actions' + (b ? ' has-del' : '') + '"><button type="submit" class="btn btn-primary">' + 'Save' + '</button>' +
+      (b ? '<button type="button" class="btn btn-danger btn-del" data-la="del" aria-label="Delete this bill">Delete</button>' : '') + '</div></form>';
     openLayer(html, {
       actions: {
         chip: chipAction,
@@ -1884,8 +1885,8 @@
       '<label class="field"><span class="field-label">Day it\'s due</span><select class="select" id="d-due">' + dayOptions(cur.dueDay, true) + '</select></label>' +
       '<label class="field"><span class="field-label">Interest rate %</span><input class="input" id="d-rate" type="text" inputmode="decimal" autocomplete="off" placeholder="Not sure" value="' + esc(cur.rate == null ? '' : String(cur.rate)) + '"></label>' +
       '</div><p class="field-help" style="margin-top:-8px;margin-bottom:18px">Not sure of the day or rate? Leave them — that\'s fine.</p>' +
-      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div>' +
-      (d ? '<button type="button" class="btn btn-text" data-la="del" style="color:var(--coral-ink);margin-top:14px">Delete this debt</button>' : '') + '</form>';
+      '<div class="sheet-actions' + (d ? ' has-del' : '') + '"><button type="submit" class="btn btn-primary">' + 'Save' + '</button>' +
+      (d ? '<button type="button" class="btn btn-danger btn-del" data-la="del" aria-label="Delete this debt">Delete</button>' : '') + '</div></form>';
     openLayer(html, {
       actions: {
         chip: chipAction,
@@ -2005,9 +2006,13 @@
       '<form data-lsubmit novalidate autocomplete="off"><label class="field"><span class="field-label">' + esc(o.label) + '</span>' +
       moneyField('m-val', o.value, { big: true, placeholder: o.placeholder }) + (o.help ? '<span class="field-help">' + esc(o.help) + '</span>' : '') + '</label>' +
       '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button>' +
-      (o.skip ? '<button type="button" class="btn btn-text" data-la="skip">' + esc(o.skip) + '</button>' : '') + '</div></form>';
+      (o.skip ? '<button type="button" class="btn btn-text" data-la="skip">' + esc(o.skip) + '</button>' : '') +
+      (o.more ? '<button type="button" class="btn btn-text" data-la="more">' + esc(o.more.label) + '</button>' : '') + '</div></form>';
     openLayer(html, {
-      actions: { skip: function (el, entry) { closeLayer(entry); } },
+      actions: {
+        skip: function (el, entry) { closeLayer(entry); },
+        more: function (el, entry) { closeLayer(entry); o.more.fn(); },
+      },
       onSubmit: function (form, entry) {
         clearErrors(entry.box);
         const n = parseMoney($('m-val').value);

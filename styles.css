@@ -1727,7 +1727,7 @@ input[type="range"]::-moz-range-thumb { width: 26px; height: 26px; border-radius
   font-size: 18px;
 }
 .input:focus, .select:focus { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(255, 160, 40, .18); }
-.select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'%3E%3Cpath d='M2 2l6 6 6-6' fill='none' stroke='%23FFA028' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'%3E%3Cpath d='M2 2l6 6 6-6' fill='none' stroke='%23FFA028' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 16px center; background-size: 16px 10px; }
 input[type="date"].input { min-height: 54px; }
 input[type="date"]::-webkit-calendar-picker-indicator { opacity: .8; filter: invert(.75) sepia(1) saturate(4) hue-rotate(350deg); }
 .money .cur { font-family: var(--mono); color: var(--amber); }
@@ -1817,3 +1817,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .8; filter: inv
 
 @keyframes sweep-in { from { transform: translateX(-28px); opacity: 0; } to { transform: none; opacity: 1; } }
 .boot-title { font-family: var(--mono); font-size: 20px; letter-spacing: 4px; color: var(--amber); }
+
+/* Edit sheets: Delete sits beside Save in the always-visible action bar. */
+.sheet-actions.has-del { grid-template-columns: minmax(0, 1fr) auto; }
+.btn-del { width: auto; padding-left: 20px; padding-right: 20px; }
