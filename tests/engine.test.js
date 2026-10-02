@@ -766,14 +766,57 @@ test('checkinDue and backupDue, incl. snooze', () => {
   assert.equal(E.summary(empty, '2027-09-30').checkinDue, false, 'nothing to check');
 
   assert.equal(E.summary(s, '2026-10-01').backupDue, false, 'no paydays yet');
-  E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' });
-  assert.equal(E.summary(s, '2026-10-01').backupDue, true, 'never backed up');
-  E.act.markBackedUp(s, '2026-10-01');
-  assert.equal(E.summary(s, '2026-10-30').backupDue, false);
-  assert.equal(E.summary(s, '2026-10-31').backupDue, true);
-  E.act.snoozeBackup(s, '2026-10-31', 7);
-  assert.equal(E.summary(s, '2026-11-06').backupDue, false);
-  assert.equal(E.summary(s, '2026-11-07').backupDue, true);
+  const pd = E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }, now('2026-10-01'));
+  assert.equal(E.summary(s, '2026-10-01').backup.reason, 'never', 'never backed up');
+  E.act.markBackedUp(s, '2026-10-01', now('2026-10-01'));
+  assert.equal(E.summary(s, '2026-10-30').backupDue, false, 'nothing changed: no reminder, however long');
+});
+
+test('backup reminders: after a payday, after lots of entries, after 14 days with changes, snooze', () => {
+  const s = base();
+  E.act.addPayday(s, { date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }, now('2026-10-01'));
+  E.act.markBackedUp(s, '2026-10-01', now('2026-10-01'));
+  let b = E.backupStatus(s, '2026-10-01');
+  assert.deepEqual([b.due, b.changes, b.daysSince], [false, 0, 0]);
+  // A few ticks later the same day: counted (by time), but not enough to nag.
+  const pd = s.paydays[0];
+  E.act.tick(s, pd.id, 'bills', true, now('2026-10-01'));
+  E.act.tick(s, pd.id, 'spend', true, now('2026-10-01'));
+  b = E.backupStatus(s, '2026-10-05');
+  assert.deepEqual([b.due, b.changes], [false, 2]);
+  // 14 days with changes → due.
+  assert.equal(E.backupStatus(s, '2026-10-14').due, false);
+  b = E.backupStatus(s, '2026-10-15');
+  assert.deepEqual([b.due, b.reason, b.daysSince], [true, 'days', 14]);
+  // Lots of entries → due sooner.
+  E.act.markBackedUp(s, '2026-10-05', now('2026-10-05'));
+  for (let i = 0; i < 14; i++) E.act.addPurchase(s, { date: '2026-10-06', amount: 5, where: 'Cafe', category: 'eat' }, now('2026-10-06'));
+  assert.equal(E.backupStatus(s, '2026-10-06').due, false);
+  E.act.addPurchase(s, { date: '2026-10-06', amount: 5, where: 'Cafe', category: 'eat' }, now('2026-10-06'));
+  b = E.backupStatus(s, '2026-10-06');
+  assert.deepEqual([b.due, b.reason, b.changes], [true, 'changes', 15]);
+  // A new payday → due right away (shown once its checklist is done).
+  E.act.markBackedUp(s, '2026-10-06', now('2026-10-06'));
+  E.act.addPayday(s, { date: '2026-10-15', amount: 2000, nextDate: '2026-10-29' }, now('2026-10-15'));
+  b = E.backupStatus(s, '2026-10-15');
+  assert.deepEqual([b.due, b.reason], [true, 'payday']);
+  // "Later" waits 3 days by default.
+  E.act.snoozeBackup(s, '2026-10-15');
+  assert.equal(E.backupStatus(s, '2026-10-17').due, false);
+  assert.equal(E.backupStatus(s, '2026-10-18').due, true);
+  // Editing a bill counts as a change too.
+  E.act.markBackedUp(s, '2026-10-18', now('2026-10-18'));
+  assert.equal(E.backupStatus(s, '2026-11-20').due, false);
+  s.bills[0].amount = 175;
+  b = E.backupStatus(s, '2026-11-20');
+  assert.deepEqual([b.due, b.reason, b.changes], [true, 'days', 1]);
+  // Old data with only a backup date: same-day items aren't counted, later ones are.
+  const o = base();
+  E.act.addPurchase(o, { date: '2026-10-03', amount: 9, where: 'A', category: 'eat' }, now('2026-10-03'));
+  o.meta.lastBackupAt = '2026-10-03';
+  E.act.addPurchase(o, { date: '2026-10-04', amount: 9, where: 'B', category: 'eat' }, now('2026-10-04'));
+  assert.equal(E.backupStatus(o, '2026-10-20').changes, 1);
+  assert.equal(E.summary(o, '2026-10-20').backup.reason, 'days');
 });
 
 // ---------------------------------------------------------------- projection
@@ -1008,6 +1051,8 @@ test('normalizeState / readBackup accept a real backup', () => {
   assert.deepEqual(r.info, { exportedAt: '2026-10-20', paydays: 2, debts: 2 });
   const expected = JSON.parse(JSON.stringify(s));
   expected.meta.lastBackupAt = '2026-10-20';           // the backup records its own date
+  assert.equal(typeof r.state.meta.backupHash, 'string'); // …and a fingerprint of the setup at that moment
+  expected.meta.backupHash = r.state.meta.backupHash;
   assert.deepEqual(r.state, expected);
   assert.equal(E.readBackup(JSON.parse(text), '2026-10-21').ok, true);
   const n = E.normalizeState(JSON.parse(JSON.stringify(s)), '2026-10-21');
@@ -1972,6 +2017,8 @@ test('§10.1 schema-1 backup restores; schema-2 backups round-trip', () => {
   assert.equal(back.ok, true);
   const expected = JSON.parse(JSON.stringify(t));
   expected.meta.lastBackupAt = '2026-10-03';
+  expected.meta.backupHash = back.state.meta.backupHash;
+  assert.equal(typeof back.state.meta.backupHash, 'string');
   assert.deepEqual(back.state, expected);
   // Old-style savings inside accounts is folded into .savings.
   const odd = E.normalizeState(Object.assign(JSON.parse(JSON.stringify(t)), {

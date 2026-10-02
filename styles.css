@@ -1821,3 +1821,4 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .8; filter: inv
 /* Edit sheets: Delete sits beside Save in the always-visible action bar. */
 .sheet-actions.has-del { grid-template-columns: minmax(0, 1fr) auto; }
 .btn-del { width: auto; padding-left: 20px; padding-right: 20px; }
+.cheer-backup { font-size: 15px; margin: 12px 0 10px; color: var(--text); }

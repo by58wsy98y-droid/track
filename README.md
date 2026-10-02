@@ -32,8 +32,9 @@ On iPad or iPhone, open that link in **Safari**, tap **Share** (the square with 
 - **Always open Harbor from the Home Screen icon.** Safari and the Home Screen app keep separate data.
 - **Deleting the Harbor icon deletes its data.** So does clearing Safari's history and website data.
 - Your iPad and iPhone **don't sync**. Pick one, or move your data with a backup file.
-- **Back up** once a month: Settings → Your data → Back up now → Save to Files (iCloud Drive).
-  Harbor reminds you. To bring data back (or onto another device): Settings → Your data → Restore.
+- **Back up** regularly: Settings → Your data → Back up now → Save to Files (iCloud Drive).
+  Harbor reminds you after each payday, after lots of new entries, or two weeks after your last backup
+  (never when nothing changed). To bring data back (or onto another device): Settings → Your data → Restore.
 
 ## Works offline
 

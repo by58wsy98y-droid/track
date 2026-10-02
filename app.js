@@ -799,8 +799,8 @@
         '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="safariHow">How?</button>' +
         '<button type="button" class="btn btn-text btn-small" data-action="safariLater">Later</button></span></div>';
     } else if (s.backupDue) {
-      const last = state.meta.lastBackupAt ? fdate(state.meta.lastBackupAt) : 'never';
-      h = '<div class="remind"><span class="remind-text">Back up your data<small>Last: ' + esc(last) + '</small></span>' +
+      const w = backupWords(s.backup);
+      h = '<div class="remind"><span class="remind-text">' + esc(w.title) + '<small>' + esc(w.small) + '</small></span>' +
         '<span class="remind-actions"><button type="button" class="btn btn-soft btn-small" data-action="backup">Back up</button>' +
         '<button type="button" class="btn btn-text btn-small" data-action="snoozeBackup">Later</button></span></div>';
     } else if (s.checkinDue) {
@@ -809,6 +809,15 @@
         '<button type="button" class="btn btn-text btn-small" data-action="snoozeCheckin">Not now</button></span></div>';
     }
     return h ? '<div class="reminders">' + h + '</div>' : '';
+  }
+
+  // Why we're asking for a backup now, in plain words.
+  function backupWords(b) {
+    const last = b.lastAt ? fdate(b.lastAt) : null;
+    if (b.reason === 'never' || !last) return { title: 'Back up your data', small: 'You haven\'t saved a backup yet' };
+    if (b.reason === 'payday') return { title: 'Back up your payday', small: 'Last backup: ' + last };
+    if (b.reason === 'changes') return { title: 'Back up your data', small: plural(b.changes, 'change') + ' since ' + last };
+    return { title: 'Back up your data', small: plural(b.daysSince, 'day') + ' since your last one' };
   }
 
   function openSafariSheet() {
@@ -975,7 +984,9 @@
         '<br><button type="button" class="btn btn-soft btn-small" data-action="tipDone">Got it</button></div></div>';
     }
     if (complete && c.total > 0) {
-      h += '<div class="cheer" role="status"><p class="cheer-big">All done. Nice work.</p><p class="cheer-small">' + esc(streakText(E.streak(state))) + '</p></div>';
+      h += '<div class="cheer" role="status"><p class="cheer-big">All done. Nice work.</p><p class="cheer-small">' + esc(streakText(E.streak(state))) + '</p>' +
+        (summary().backupDue ? '<p class="cheer-backup">Save a backup of this payday? It takes 10 seconds.</p>' +
+          '<button type="button" class="btn btn-soft btn-small" data-action="backup">Back up now</button>' : '') + '</div>';
     }
     h += '<button type="button" class="btn btn-primary" data-action="flowClose">' + (complete ? 'Done' : 'Done for now') + '</button>';
     return h;
@@ -1542,7 +1553,7 @@
 
     const last = state.meta.lastBackupAt ? fdate(state.meta.lastBackupAt) : 'never';
     h += '<h2 class="section-title">Your data</h2><div class="card group">' +
-      row('backup', 'Back up now', 'Last: ' + last) +
+      row('backup', 'Back up now', 'Last: ' + last, { small: sum.backup.lastAt && sum.backup.changes > 0 ? plural(sum.backup.changes, 'change') + ' since then' : null }) +
       row('restore', 'Restore from a backup', null) +
       '<div class="group-pad"><ul class="warn-list">' +
       warn('■', 'Your money info lives only on this device — nothing is sent anywhere.') +
@@ -1550,7 +1561,7 @@
       warn('■', 'Deleting the Harbor icon from your Home Screen deletes its data.') +
       warn('■', 'Clearing Safari\'s history and website data can wipe it.') +
       warn('■', 'Your iPad and iPhone don\'t sync. Pick one, or move your data with a backup file.') +
-      warn('■', 'Keep a backup in iCloud Drive or Files — we\'ll remind you once a month.') +
+      warn('■', 'Keep a backup in iCloud Drive or Files — Harbor reminds you after paydays and busy weeks.') +
       '</ul></div>' +
       row('startOver', 'Start over', null, { cls: 'danger', noChev: true }) + '</div>';
 
@@ -2224,7 +2235,7 @@
   function backupName() { return 'harbor-backup-' + today() + '.json'; }
 
   function backedUp(how) {
-    E.act.markBackedUp(state, today());
+    E.act.markBackedUp(state, today(), now());
     save();
     render();
     toast(how === 'share' ? 'Backup saved ✓ Keep it in Files or iCloud Drive.' : 'Backup downloaded ✓ Keep it somewhere safe.');
@@ -2440,7 +2451,7 @@
     backup: function () { backup(); },
     safariHow: function () { openSafariSheet(); },
     safariLater: function () { ui.safariLater = true; render(); },
-    snoozeBackup: function () { E.act.snoozeBackup(state, today(), 7); save(); render(); toast('Okay — we\'ll remind you next week.'); },
+    snoozeBackup: function () { E.act.snoozeBackup(state, today(), 3); save(); render(); toast('Okay — I\'ll remind you in a few days.'); },
     dismissLoad: function () { loadProblem = null; renderBanner(); },
 
     // payday flow

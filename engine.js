@@ -1482,12 +1482,50 @@
     (state.checkins || []).forEach((c) => { if (c.date > last) last = c.date; });
     return D.diffDays(last, today) >= 30 && !snoozed(state.meta && state.meta.checkinSnoozeUntil, today);
   }
-  function backupDue(state, today) {
-    if (!(state.paydays || []).length) return false;
-    const meta = state.meta || {};
-    const old = !D.isValid(meta.lastBackupAt) || D.diffDays(meta.lastBackupAt, today) >= 30;
-    return old && !snoozed(meta.backupSnoozeUntil, today);
+  // ---- backups: remind by time AND by how much changed since the last backup file.
+  const BACKUP_DAYS = 14;        // remind after this many days, if anything changed
+  const BACKUP_CHANGES = 15;     // …or after this many entries (purchases, ticks, check-ins)
+
+  // A short fingerprint of the setup (bills, debts, settings…), so edits there count as a change too.
+  function setupHash(state) {
+    const str = JSON.stringify([state.settings, state.bills, state.debts, state.accounts, state.savings]);
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
   }
+
+  // { due, reason: 'never'|'payday'|'changes'|'days'|null, lastAt, daysSince, changes }
+  function backupStatus(state, today) {
+    const meta = state.meta || {};
+    const lastAt = D.isValid(meta.lastBackupAt) ? meta.lastBackupAt : null;
+    const lastT = Number.isFinite(Number(meta.lastBackupT)) && Number(meta.lastBackupT) > 0 ? Number(meta.lastBackupT) : null;
+    // Did this happen after the last backup? Use the time when we have it, else the day.
+    const after = (date, t) => {
+      if (!lastAt) return true;
+      if (lastT && Number(t) > 0) return Number(t) > lastT;
+      return D.isValid(date) && date > lastAt;
+    };
+    let changes = 0, newPayday = false;
+    (state.paydays || []).forEach((pd) => {
+      if (after(pd.date, pd.t)) { changes++; newPayday = true; }
+      Object.keys(pd.ticks || {}).forEach((k) => { const tk = pd.ticks[k]; if (tk && after(tk.d, tk.t)) changes++; });
+    });
+    (state.purchases || []).forEach((p) => { if (after(p.date, p.t)) changes++; });
+    (state.checkins || []).forEach((c) => { if (after(c.date, c.t)) changes++; });
+    if (lastAt && meta.backupHash && meta.backupHash !== setupHash(state)) changes++;
+    const daysSince = lastAt ? D.diffDays(lastAt, today) : null;
+    const hasData = (state.paydays || []).length > 0 || (state.purchases || []).length > 0;
+    let reason = null;
+    if (!lastAt) reason = hasData ? 'never' : null;
+    else if (changes > 0) {
+      if (newPayday) reason = 'payday';
+      else if (changes >= BACKUP_CHANGES) reason = 'changes';
+      else if (daysSince >= BACKUP_DAYS) reason = 'days';
+    }
+    const due = !!reason && !snoozed(meta.backupSnoozeUntil, today);
+    return { due, reason: due ? reason : null, lastAt, daysSince, changes };
+  }
+  function backupDue(state, today) { return backupStatus(state, today).due; }
 
   // ---------------------------------------------------------------- summary (§4.9)
 
@@ -1633,6 +1671,7 @@
       stretch: stretchSpending(state, today, ctx.balances),
       checkinDue: checkinDue(state, today, ctx),
       backupDue: backupDue(state, today),
+      backup: backupStatus(state, today),
     };
   }
 
@@ -1778,6 +1817,9 @@
         recapsShown: isObj(mt.recapsShown) ? Object.assign({}, mt.recapsShown) : {},
         tips: isObj(mt.tips) ? Object.assign({}, mt.tips) : {},
       };
+      // Backup bookkeeping (§ backups) — only kept when present, so older data stays exactly as it was.
+      if (Number.isFinite(Number(mt.lastBackupT)) && Number(mt.lastBackupT) > 0) st.meta.lastBackupT = Number(mt.lastBackupT);
+      if (typeof mt.backupHash === 'string' && mt.backupHash) st.meta.backupHash = mt.backupHash;
       return { ok: true, state: st, error: null };
     } catch (e) {
       return fail('That file couldn\'t be read.');
@@ -1787,7 +1829,10 @@
   function makeBackup(state, today) {
     const data = JSON.parse(JSON.stringify(state));
     // The file records its own backup date, so restoring it doesn't ask for a backup right away.
-    if (isObj(data.meta)) { data.meta.lastBackupAt = today; data.meta.backupSnoozeUntil = null; }
+    if (isObj(data.meta)) {
+      data.meta.lastBackupAt = today; data.meta.backupSnoozeUntil = null;
+      data.meta.lastBackupT = null; data.meta.backupHash = setupHash(data);
+    }
     return { app: 'harbor', schema: SCHEMA, exportedAt: today, data };
   }
 
@@ -2021,8 +2066,15 @@
 
     // Small extras for the UI (not in the spec table, but handy).
     snoozeCheckin(state, today, days) { state.meta.checkinSnoozeUntil = D.addDays(today, days || 30); return state; },
-    snoozeBackup(state, today, days) { state.meta.backupSnoozeUntil = D.addDays(today, days || 7); return state; },
-    markBackedUp(state, today) { state.meta.lastBackupAt = today; state.meta.backupSnoozeUntil = null; return state; },
+    snoozeBackup(state, today, days) { state.meta.backupSnoozeUntil = D.addDays(today, days || 3); return state; },
+    // `now` ({d, t}) is optional; with it, changes later that same day still count toward the next reminder.
+    markBackedUp(state, today, now) {
+      state.meta.lastBackupAt = today;
+      state.meta.lastBackupT = now && Number(now.t) > 0 ? Number(now.t) : null;
+      state.meta.backupHash = setupHash(state);
+      state.meta.backupSnoozeUntil = null;
+      return state;
+    },
     markRecapShown(state, key) { state.meta.recapsShown[key] = true; return state; },
   };
 
@@ -2039,6 +2091,7 @@
     whereItWent, stretchSpending: (state, today) => stretchSpending(state, today),
     accounts: (state, today) => accountsList(state, today),
     series: (state, today) => series(state, today),
+    backupStatus: (state, today) => backupStatus(state, today),
     ticker: (state, today) => ticker(state, today),
     streak, milestones, isComplete,
     newState, normalizeState, makeBackup, readBackup,
