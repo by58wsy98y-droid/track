@@ -797,6 +797,13 @@ async function runPlan(browser, srv, deviceName) {
     await page.press('#calc-rate', 'Tab');
     await page.waitForTimeout(150);
     assert.equal((await r.state()).pay.dailyRate, 300, 'the calculator is a what-if: it never saves');
+    await page.click('[data-action=sbFromCalc]');
+    await page.waitForSelector('.sb-result');
+    assert.equal(await page.inputValue('#calc-rate'), '320', 'a what-if rate survives a redraw');
+    await page.fill('#calc-rate', '');
+    assert.match(await page.textContent('#calc-out'), /Type your daily rate/, 'an empty box never falls back to another rate');
+    await page.click('[data-action=calcStep][data-delta="1"]');
+    assert.match(await page.textContent('#calc-out'), /Type your daily rate/);
     await r.noSideScroll('plan on ' + deviceName);
 
     // ------------------------------------------------------------ 3b. a new rate from the next trip
@@ -824,9 +831,9 @@ async function runPlan(browser, srv, deviceName) {
     await page.keyboard.press('Escape');
     await page.waitForSelector('.layer', { state: 'detached' });
     await page.click('main [data-action=editRate]');
-    await page.fill('#rc-rate', '400');
+    await page.fill('#rc-rate', '425');
     await submitLayer();
-    assert.deepEqual((await r.state()).pay.changes.map((c) => [c.from, c.rate]), [['2026-10-20', 400]]);
+    assert.deepEqual((await r.state()).pay.changes.map((c) => [c.from, c.rate]), [['2026-10-20', 425]]);
 
     // ------------------------------------------------------------ 4. sandbox (never saves)
     const before = JSON.stringify(await r.state());

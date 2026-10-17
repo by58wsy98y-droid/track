@@ -2345,14 +2345,17 @@ test('§12 rate changes: each boat day is paid at the rate in effect that day', 
   E.act.setCurrentRate(s, '2026-11-01', 520);
   assert.deepEqual([s.pay.dailyRate, s.pay.changes[0].rate], [310, 520], 'after it: edits the change');
   assert.throws(() => E.act.setCurrentRate(s, '2026-11-01', 0), /daily rate/);
-  // Paystub earnings default to the rate when that pay period ended (pay date − lag).
+  // Paystub earnings default to that pay period's rates (Oct 16–31: 5 days at 310, 7 at 520).
   const stub = E.act.addPaystub(s, { date: '2026-11-07', days: 12, net: 4000 });
-  assert.equal(stub.gross, 12 * 520);
+  assert.equal(stub.gross, 5 * 310 + 7 * 520);
+  const flat = E.act.addPaystub(s, { date: '2026-11-22', days: 10, net: 4000 });       // Nov 1–15: all at 520
+  assert.equal(flat.gross, 10 * 520);
+  E.act.deletePaystub(s, flat.id);
   assert.equal(E.paycheck.estimate(s, 7000).beyond, true, 'above every paystub');
-  assert.equal(E.paycheck.estimate(s, 6000).beyond, false);
-  assert.throws(() => E.act.addRateChange(s, { from: 'nope', rate: 400 }), /day the new rate starts/);
+  assert.equal(E.paycheck.estimate(s, 5000).beyond, false);
+  assert.throws(() => E.act.addRateChange(s, { from: 'nope', rate: 350 }), /day the new rate starts/);
   assert.throws(() => E.act.addRateChange(s, { from: '2026-12-01', rate: 0 }), /new daily rate/);
-  assert.throws(() => E.act.editRateChange(s, 'missing', { from: '2026-12-01', rate: 400 }), /gone/);
+  assert.throws(() => E.act.editRateChange(s, 'missing', { from: '2026-12-01', rate: 350 }), /gone/);
   E.act.deleteRateChange(s, s.pay.changes[0].id);
   assert.equal(E.paycheck.rateOn(s, '2026-11-01'), 310);
   // Survives backup/restore; junk is dropped; old data without changes gets no `changes` key.
@@ -2365,10 +2368,10 @@ test('§12 rate changes: each boat day is paid at the rate in effect that day', 
   assert.equal('changes' in E.normalizeState(JSON.parse(JSON.stringify(payState())), '2026-10-18').state.pay, false);
   // A rate change with no base rate: no estimate for days before it, estimates after.
   const nb = base({ settings: { payFreq: 'semimonthly' } });
-  E.act.addRateChange(nb, { from: '2026-10-20', rate: 400 });
+  E.act.addRateChange(nb, { from: '2026-10-20', rate: 350 });
   u = E.paycheck.upcoming(nb, '2026-10-17', 2);
   assert.equal(u.list[0].est, null, 'Oct 1–15 has boat days with no rate');
-  assert.equal(u.list[1].est.gross, 12 * 400);
+  assert.equal(u.list[1].est.gross, 12 * 350);
 });
 
 test('§12 sandbox: a practice run on a copy — plans, balances after, warnings, nothing saved', () => {

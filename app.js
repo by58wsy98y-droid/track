@@ -263,6 +263,7 @@
     safariLater: false,   // "Later" on the Safari-tab reminder: this launch only
     allBuys: false,       // Money: show all recent purchases, not just the latest few
     calcDays: null,       // Plan: days in the paycheck calculator
+    calcRate: null,       // Plan: what-if rate typed in the calculator (null = your rate, '' = box cleared)
     sandbox: { amount: '', date: null, multi: false, result: null },
   };
 
@@ -1097,8 +1098,11 @@
 
   // Rates: today's, and the one the calculator starts with (your trip now, or the next one when home).
   function rateNow() { return E.paycheck.rateOn(state, today()); }
-  function tripRateDay() { return E.paycheck.tripStart(state, today()) || today(); }
+  function tripRateDay() { const t = E.paycheck.tripStart(state, today()); return t && t > today() ? t : today(); }
   function calcRateDefault() { return E.paycheck.rateOn(state, tripRateDay()) || rateNow(); }
+  function calcRateNow() { return ui.calcRate === '' ? null : ui.calcRate > 0 ? ui.calcRate : calcRateDefault(); }
+  // Saved rates changed: the calculator goes back to following them.
+  function ratesChanged() { ui.calcRate = null; }
   function rateBefore(ps, c) {
     let r = ps.dailyRate;
     ps.changes.forEach(function (x) { if (x.from < c.from) r = x.rate; });
@@ -1118,6 +1122,7 @@
         return row('editRate', (c.from > today() ? 'New rate from ' : 'Rate change · ') + D.fmtShort(c.from), money(c.rate) + ' / day',
           { id: c.id, small: was ? 'Was ' + money(was) + ' a day' : null, valueCls: 'is-amt' });
       }).join('') +
+      (inEffect && ps.dailyRate ? row('payBase', 'Before ' + D.fmtShort(ps.changes[0].from), money(ps.dailyRate) + ' / day', { small: 'Your earlier rate', valueCls: 'is-amt' }) : '') +
       row('addRate', '+ Add a rate change', null, { cls: 'add', noChev: true, small: ps.changes.length ? null : 'A raise, or a new rate starting on a trip' }) +
       row('paySchedule', 'Pay schedule', freqLabel(state.settings.payFreq), { small: payLagText(ps), valueCls: state.settings.payFreq ? '' : 'is-add' }) +
       ps.stubs.slice().reverse().map(function (x) {
@@ -1149,7 +1154,7 @@
         const low = x.est && avg && x.est.net < avg * 0.45;
         return '<button type="button" class="pt-row" role="row" data-action="sbPick" data-date="' + esc(x.payDate) + '" data-amt="' + (x.est ? x.est.net : '') + '"' +
           ' aria-label="' + esc(fdate(x.payDate) + ': ' + plural(x.days, 'day') + ' on the boat' +
-            (x.rates && x.rates.length > 1 ? ' (' + x.rates.map(function (q) { return q.days + ' at ' + money(q.rate); }).join(', ') + ')' : '') +
+            (x.rates && x.rates.length > 1 ? ' (' + x.rates.map(function (q) { return q.days + ' at ' + (q.rate > 0 ? money(q.rate) : 'no rate set'); }).join(', ') + ')' : '') +
             (x.est ? ', about ' + money(x.est.net) : '') + '. Try it in the sandbox.') + '">' +
           '<span role="cell">' + esc(D.fmtShort(x.payDate)) + '</span><span role="cell" class="mut">' + esc(shortRange(x.start, x.end)) + '</span>' +
           '<span role="cell">' + x.days + '</span>' +
@@ -1185,12 +1190,12 @@
       '<input class="input" id="calc-days" type="text" inputmode="numeric" autocomplete="off" value="' + days + '" data-live="calcDays">' +
       '<button type="button" class="step-btn" data-action="calcStep" data-delta="1" aria-label="One day more">+</button></div></div>' +
       '<label class="field"><span class="field-label">Daily rate</span>' +
-      moneyField('calc-rate', calcRateDefault(), { placeholder: '0' }).replace('<input ', '<input data-live="calcRate" ') +
+      moneyField('calc-rate', calcRateNow(), { placeholder: '0' }).replace('<input ', '<input data-live="calcRate" ') +
       '<span class="field-help">Try any rate here. Your saved rates are in Pay setup.</span></label></div>' +
-      '<div id="calc-out" aria-live="polite">' + calcOutHTML(days, calcRateDefault()) + '</div></section>';
+      '<div id="calc-out" aria-live="polite">' + calcOutHTML(days, calcRateNow()) + '</div></section>';
   }
   function calcOutHTML(days, rate) {
-    const r = E.paycheck.forDays(state, days, rate);
+    const r = rate > 0 ? E.paycheck.forDays(state, days, rate) : null;
     if (!r) return '<p class="small-note">Type your daily rate to see your take-home.</p>';
     const ps = E.paycheck.settings(state);
     return '<div class="calc-out">' + kvHTML('Earnings', fig(r.gross), '') +
@@ -1353,7 +1358,7 @@
           confirmBox('Delete this rate change?', money(c.rate) + ' a day from ' + fdate(c.from) + '.', 'Delete it', 'Keep it', true).then(function (yes) {
             if (!yes) return;
             E.act.deleteRateChange(state, c.id);
-            save(); closeLayer(entry); render(); toast('Rate change deleted.');
+            ratesChanged(); save(); closeLayer(entry); render(); toast('Rate change deleted.');
           });
         },
       },
@@ -1367,7 +1372,7 @@
         try {
           if (c) E.act.editRateChange(state, c.id, input); else E.act.addRateChange(state, input);
         } catch (err) { setError('rc-rate', (err && err.message) || 'Something didn\'t work. Try again.'); return; }
-        save(); closeLayer(entry); render();
+        ratesChanged(); save(); closeLayer(entry); render();
         toast('Saved. Boat days from ' + D.fmtShort(day) + ' on count at ' + money(rate) + ' a day.');
       },
     });
@@ -2887,7 +2892,14 @@
       openMoneySheet({ title: 'Daily rate', label: 'What you earn per day on the boat right now, before taxes', value: rateNow(), example: '300', positive: true,
         help: 'On your pay app it\'s Earnings ÷ Hours.' + (next ? ' Your new rate from ' + D.fmtShort(next.from) + ' stays as it is.' : ''),
         more: next ? null : { label: 'My rate is changing', fn: function () { openRateSheet(null); } },
-        save: function (n) { E.act.setCurrentRate(state, today(), n); } });
+        save: function (n) { E.act.setCurrentRate(state, today(), n); ratesChanged(); } });
+    },
+    payBase: function () {
+      const ps = E.paycheck.settings(state);
+      const first = ps.changes[0];
+      openMoneySheet({ title: 'Earlier rate', label: 'Your daily rate before ' + (first ? fdate(first.from) : 'your rate changed'), value: ps.dailyRate, example: '300', positive: true,
+        help: 'Used for boat days before your first rate change, like the start of a paycheck that\'s still coming.',
+        save: function (n) { E.act.setPay(state, { dailyRate: n }); ratesChanged(); } });
     },
     addRate: function () { openRateSheet(null); },
     editRate: function (el) { openRateSheet(el.dataset.id); },
@@ -2899,9 +2911,7 @@
       const ps = E.paycheck.settings(state);
       ui.calcDays = Math.max(0, Math.min(31, Math.round(calcDaysNow(ps) + Number(el.dataset.delta))));
       const d = $('calc-days'); if (d) d.value = ui.calcDays;
-      const rateEl = $('calc-rate');
-      const rate = rateEl ? parseMoney(rateEl.value) : null;
-      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : calcRateDefault());
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, calcRateNow());
     },
     sbPick: function (el) {
       const amt = Number(el.dataset.amt);
@@ -2960,14 +2970,12 @@
     calcDays: function (el) {
       const n = parseInt(String(el.value).replace(/[^\d]/g, ''), 10);
       ui.calcDays = Number.isFinite(n) ? Math.max(0, Math.min(31, n)) : 0;
-      const ps = E.paycheck.settings(state);
-      const rateEl = $('calc-rate');
-      const rate = rateEl ? parseMoney(rateEl.value) : null;
-      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : calcRateDefault());
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, calcRateNow());
     },
     calcRate: function (el) {
       const rate = parseMoney(el.value);
-      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(calcDaysNow(E.paycheck.settings(state)), rate > 0 ? rate : null);
+      ui.calcRate = rate > 0 ? rate : '';
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(calcDaysNow(E.paycheck.settings(state)), calcRateNow());
     },
     share: function (el) {
       const share = 1 - Number(el.value) / 10;

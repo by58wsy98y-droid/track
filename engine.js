@@ -2103,8 +2103,15 @@
     const net = posNumOrNull(input.net);
     if (!(net > 0)) throw new Error('Type the take-home (net pay) from the paystub.');
     let gross = posNumOrNull(input.gross);
-    const rate = rateOn(state, D.addDays(input.date, -payOf(state).lag));
-    if (!(gross > 0) && rate && days > 0) gross = round2(days * rate);
+    if (!(gross > 0) && days > 0) {
+      // Blend the rates over the pay period this stub paid (it ended `lag` days before the pay date), so a
+      // period that straddles a rate change isn't priced all at one rate.
+      const end = D.addDays(input.date, -payOf(state).lag);
+      const per = (payPeriods(state, end, end) || [])[0];
+      const g = per ? periodGross(state, per.start, per.end) : null;
+      const rate = g && g.days > 0 && g.gross > 0 ? g.gross / g.days : rateOn(state, end);
+      if (rate > 0) gross = round2(days * rate);
+    }
     if (!(gross > 0)) throw new Error('Type the earnings (gross pay) from the paystub.');
     if (net > gross) throw new Error('Take-home can\'t be more than earnings. Check the two numbers.');
     return { date: input.date, days: round2(days), gross: round2(gross), net: round2(net) };
