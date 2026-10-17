@@ -5,7 +5,7 @@
 // then walks the whole app on an iPhone 13 and an iPad (gen 7):
 // setup → payday → ticks → recap → check-in → tight payday + undo → backup → start over →
 // restore → offline reload through the service worker; then the v2 money run (schema-1 restore,
-// purchases, can I afford it, balances, both recaps). Any console error or page error fails.
+// purchases, can I afford it, balances, both recaps); then the Plan run (pay setup, calculator, sandbox). Any console error or page error fails.
 // All numbers are the generic SPEC §9 examples — never real ones.
 'use strict';
 
@@ -208,7 +208,7 @@ async function runDevice(browser, srv, deviceName) {
       ['2026-09-08', 2000, 'biweekly', 1400, 280]);
     const banner = (await page.textContent('.banner-text')).replace(/\s+/g, ' ').trim();
     assert.equal(banner, 'At sea · Day 23/28 · Home in 6d');
-    assert.deepEqual(await page.$$eval('.tab span', (e) => e.map((x) => x.textContent.trim())), ['Today', 'Money', 'Progress', 'Settings']);
+    assert.deepEqual(await page.$$eval('.tab span', (e) => e.map((x) => x.textContent.trim())), ['Today', 'Money', 'Plan', 'Progress', 'Settings']);
     assert.ok(await page.$('.spend-invite'), 'Today invites logging when nothing is logged');
     await r.noSideScroll('today after setup');
 
@@ -705,6 +705,155 @@ async function runMoney(browser, srv, deviceName) {
   }
 }
 
+// ---------------------------------------------------------------- PLAN (§12): pay setup, calculator, sandbox
+async function runPlan(browser, srv, deviceName) {
+  const ctx = await browser.newContext({ ...devices[deviceName], serviceWorkers: 'block' });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('console', (m) => { if (m.type() === 'error') errors.push('[console] ' + m.text()); });
+  page.on('pageerror', (e) => errors.push('[pageerror] ' + e.message));
+  const r = makeRunner(page, srv.base, errors);
+  const toastText = async () => { await page.waitForTimeout(150); return (await page.textContent('#toast')).trim(); };
+  const submitLayer = async () => {
+    await page.click('.layer button[type=submit]');
+    await page.waitForSelector('.layer', { state: 'detached' });
+  };
+  const takeHome = async () => (await page.textContent('#calc-out .q-big')).trim();
+
+  try {
+    await r.at('2026-10-17');
+    await page.evaluate(() => {
+      const E = window.Engine;
+      const st = E.newState('2026-09-30');
+      Object.assign(st.settings, { boatDate: '2026-09-08', payAmount: 2000, payFreq: 'semimonthly', homeSpend: 1400, boatSpend: 280 });
+      st.bills = [
+        { id: 'b1', name: 'Car insurance', amount: 150, freq: 'monthly', dueDay: 5, dueMonth: null },
+        { id: 'b2', name: 'Phone', amount: 80, freq: 'monthly', dueDay: 12, dueMonth: null },
+      ];
+      st.debts = [{ id: 'visa', name: 'Visa', balance: 1200, asOf: '2026-09-30', minPayment: 40, dueDay: 10, rate: 24 }];
+      st.savings = { amount: 200, asOf: '2026-09-30' };
+      st.setupDone = true;
+      st.meta.tips.spendingCard = true;
+      st.meta.tips.addToHome = true;
+      const pd = E.act.addPayday(st, { date: '2026-10-07', amount: 2000, nextDate: '2026-10-22' }, { d: '2026-10-07', t: 1 });
+      pd.plan.items.forEach((it) => E.act.tick(st, pd.id, it.key, true, { d: '2026-10-07', t: 2 }));
+      E.act.markAllCelebrated(st, '2026-10-07');
+      E.act.markBackedUp(st, '2026-10-08', { d: '2026-10-08', t: 3 });
+      localStorage.setItem('harbor.v1', JSON.stringify(st));
+    });
+    await r.at('2026-10-17');
+    await r.dismissPopups();
+    assert.doesNotMatch(await page.textContent('.next-card'), /about \$/, 'no estimate before a daily rate');
+
+    // ------------------------------------------------------------ 1. empty Plan, then the daily rate
+    await page.click('.tab[data-to=plan]');
+    await page.waitForSelector('#calc-out');
+    assert.match(await page.textContent('#calc-out'), /Type your daily rate/);
+    assert.match(await page.textContent('main'), /Set your daily rate to see the amounts/);
+    assert.match(await page.textContent('main'), /Taxes for now[^%]*20%/);
+    await page.click('main [data-action=payRate]');
+    await page.fill('#m-val', '300');
+    await submitLayer();
+    assert.equal((await r.state()).pay.dailyRate, 300);
+    // Oct 22 pays for Oct 1–15. Boat Sep 8 for 28 days → home from Oct 6, so Oct 1–5 = 5 boat days.
+    let first = await page.$eval('button.pt-row', (el) => [...el.querySelectorAll('[role=cell]')].map((c) => c.textContent.trim()));
+    assert.deepEqual(first.slice(0, 3), ['Oct 22', 'Oct 1–15', '5']);
+    assert.equal(first[3], '1,200.00', '5 days × $300 less the default 20%');
+    assert.equal(await takeHome(), '$3,600.00', '15 days × $300 less 20%');
+
+    // ------------------------------------------------------------ 2. paystubs (one with a mistake first)
+    await page.click('main [data-action=addStub]');
+    await page.fill('#st-date', '2026-10-07');
+    await page.fill('#st-days', '15');
+    await page.fill('#st-net', '3330');
+    await submitLayer();
+    let st = await r.state();
+    assert.deepEqual(st.pay.stubs.map((x) => [x.date, x.days, x.gross, x.net]), [['2026-10-07', 15, 4500, 3330]], 'earnings default to days × rate');
+    assert.match(await toastText(), /Paystub added/);
+    await page.click('main [data-action=addStub]');
+    await page.fill('#st-date', '2026-09-22');
+    await page.fill('#st-days', '8');
+    await page.fill('#st-gross', '2400');
+    await page.fill('#st-net', '2500');
+    await page.click('.layer button[type=submit]');
+    assert.match(await page.textContent('.layer'), /Take-home can't be more than earnings/);
+    await page.fill('#st-net', '1880');
+    await submitLayer();
+    st = await r.state();
+    assert.deepEqual(st.pay.stubs.map((x) => x.date), ['2026-09-22', '2026-10-07'], 'sorted by date');
+    assert.doesNotMatch(await page.textContent('main'), /Taxes for now/, 'default tax row hides once there are paystubs');
+
+    // ------------------------------------------------------------ 3. calculator
+    assert.equal(await takeHome(), '$3,330.00', 'starts at the last paystub\'s days and matches it exactly');
+    assert.match(await page.textContent('#calc-out'), /Estimated from your 2 paystubs/);
+    await page.click('[data-action=calcStep][data-delta="-1"]');
+    assert.equal(await page.inputValue('#calc-days'), '14');
+    const est14 = await page.evaluate(() => window.Engine.paycheck.forDays(window.Harbor.state, 14).net);
+    assert.equal(await takeHome(), '$' + est14.toLocaleString('en-US', { minimumFractionDigits: 2 }));
+    await page.fill('#calc-days', '8');
+    assert.equal(await takeHome(), '$1,880.00', '8 days matches the other paystub');
+    await page.fill('#calc-rate', '320');
+    assert.notEqual(await takeHome(), '$1,880.00', 'live update while typing a rate');
+    assert.equal((await r.state()).pay.dailyRate, 300, 'not saved until you leave the box');
+    await page.press('#calc-rate', 'Tab');
+    await page.waitForTimeout(150);
+    assert.equal((await r.state()).pay.dailyRate, 320);
+    assert.match(await toastText(), /Daily rate saved/);
+    await page.click('main [data-action=payRate]');
+    await page.fill('#m-val', '300');
+    await submitLayer();
+    await r.noSideScroll('plan on ' + deviceName);
+
+    // ------------------------------------------------------------ 4. sandbox (never saves)
+    const before = JSON.stringify(await r.state());
+    await page.click('button.pt-row >> nth=0');
+    await page.waitForSelector('.sb-result');
+    let txt = await page.textContent('.sb-result');
+    assert.match(txt, /What to do with \$1,\d{3} on Oct 22/);
+    assert.match(txt, /Your accounts/);
+    assert.match(txt, /Savings/);
+    assert.match(txt, /Visa/);
+    assert.equal(await page.inputValue('#sb-date'), '2026-10-22');
+    await page.fill('#sb-amt', '100');
+    await page.click('form[data-submit=sbRun] button[type=submit]');
+    await page.waitForSelector('.sb-warn');
+    assert.match(await page.textContent('.sb-warn'), /short of your bills/);
+    await page.fill('#sb-amt', '');
+    await page.click('form[data-submit=sbRun] button[type=submit]');
+    assert.match(await page.textContent('#sandbox'), /Type an amount to try/);
+    await page.click('[data-action=sbMulti]');
+    await page.waitForSelector('.sb-steps');
+    assert.equal(await page.$$eval('.sb-steps .pt-row:not(.pt-head)', (e) => e.length), 3);
+    assert.equal(JSON.stringify(await r.state()), before, 'the sandbox saved nothing');
+    await r.noSideScroll('sandbox on ' + deviceName);
+
+    // ------------------------------------------------------------ 5. average → normal paycheck; delete a stub
+    const avg = await page.evaluate(() => Math.round(window.Engine.paycheck.average(window.Harbor.state, '2026-10-17')));
+    await page.click('[data-action=useAvg]');
+    assert.equal((await r.state()).settings.payAmount, avg);
+    assert.equal(await page.$('[data-action=useAvg]'), null, 'button hides once it matches');
+    await page.click('main [data-action=editStub] >> nth=0');
+    await page.click('.layer [data-la=del]');
+    await page.click('.layer [data-la=pick] >> text=Delete it');
+    await page.waitForSelector('.layer', { state: 'detached' });
+    assert.equal((await r.state()).pay.stubs.length, 1);
+
+    // ------------------------------------------------------------ 6. Today + payday use the schedule
+    await page.click('.tab[data-to=today]');
+    const est = await page.evaluate(() => window.Engine.paycheck.upcoming(window.Harbor.state, '2026-10-17', 1).list[0].est.net);
+    assert.match(await page.textContent('.next-card'), new RegExp('Around Oct 22.*about \\$' + Math.round(est).toLocaleString('en-US')));
+    await page.click('.next-card [data-action=startPayday]');
+    await page.waitForSelector('#p-amt');
+    assert.equal(await page.inputValue('#p-next'), '2026-10-22', 'next payday comes from the pay schedule');
+    await page.click('.chip[data-action=fillEst]');
+    assert.equal(Number(await page.inputValue('#p-amt')), est);
+
+    r.noErrors('in the plan run on ' + deviceName);
+  } finally {
+    await ctx.close();
+  }
+}
+
 // ---------------------------------------------------------------- the tests
 let srv, browser;
 
@@ -748,6 +897,8 @@ test('Harbor end to end', { timeout: 480000 }, async (t) => {
     await t.test('iPad (gen 7)', () => runDevice(browser, srv, 'iPad (gen 7)'));
     await t.test('money (v2) on iPhone 13', () => runMoney(browser, srv, 'iPhone 13'));
     await t.test('money (v2) on iPad (gen 7)', () => runMoney(browser, srv, 'iPad (gen 7)'));
+    await t.test('plan on iPhone 13', () => runPlan(browser, srv, 'iPhone 13'));
+    await t.test('plan on iPad (gen 7)', () => runPlan(browser, srv, 'iPad (gen 7)'));
   } finally {
     await browser.close();
     await new Promise((res) => srv.http.close(res));

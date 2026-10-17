@@ -19,6 +19,13 @@ Everything else (bills, spending money, which debt to pay, savings, your debt-fr
 - **Accounts:** type in your checking, spending card and savings balances (and any others) whenever you like.
   A purchase put on a credit card is added to that card's balance, and your next payday plan pays it back.
 
+**Optional — the Plan tab:**
+- **Paycheck calculator:** set your daily rate, pick the days on the boat, and see your take-home. Add two or three
+  paystubs (pay date, days = "Hours", earnings, take-home) and Harbor learns your real taxes from them.
+- **Upcoming paychecks:** your next six paydays worked out from your rotation, with a heads-up on small ones.
+- **Sandbox:** type any amount (or tap an upcoming paycheck) to see what to do with it and what your accounts would look
+  like after. Nothing in the sandbox is saved.
+
 ## Open it
 
 **https://by58wsy98y-droid.github.io/track/**
@@ -49,7 +56,7 @@ Plain HTML/CSS/JavaScript: no build step, no libraries, no server.
 | File | What it does |
 |---|---|
 | `index.html`, `styles.css`, `app.js` | The screens |
-| `engine.js` | All the money and rotation logic (no screen code) |
+| `engine.js` | All the money, rotation and paycheck logic (no screen code) |
 | `visuals.js` | Debt-vs-savings chart, stage bar, savings meter, debt table, ticker, milestone flash |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and the Home Screen icon |
 | `docs/SPEC.md` | The full design spec |

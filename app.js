@@ -262,6 +262,8 @@
     saveError: false,
     safariLater: false,   // "Later" on the Safari-tab reminder: this launch only
     allBuys: false,       // Money: show all recent purchases, not just the latest few
+    calcDays: null,       // Plan: days in the paycheck calculator
+    sandbox: { amount: '', date: null, multi: false, result: null },
   };
 
   // ------------------------------------------------------------------ icons
@@ -846,15 +848,19 @@
         '</section>';
     }
     let title, sub;
-    if (!s.nextPayday) {
+    let nextDate = s.nextPayday;
+    if (!nextDate) { const u = upcomingList(1); if (u.ok && u.list[0] && u.list[0].est) nextDate = u.list[0].payDate; }
+    if (!nextDate) {
       title = 'No paydays yet';
       sub = 'When your pay lands, tap the button below.';
     } else {
-      const diff = D.diffDays(today(), s.nextPayday);
-      if (diff >= 2) { title = 'Around ' + fdate(s.nextPayday); sub = 'in ' + diff + ' days'; }
-      else if (diff === 1) { title = 'Around ' + fdate(s.nextPayday); sub = 'tomorrow'; }
+      const diff = D.diffDays(today(), nextDate);
+      if (diff >= 2) { title = 'Around ' + fdate(nextDate); sub = 'in ' + diff + ' days'; }
+      else if (diff === 1) { title = 'Around ' + fdate(nextDate); sub = 'tomorrow'; }
       else if (diff === 0) { title = 'Around today'; sub = 'Tap the button when it lands.'; }
-      else { title = 'Was due around ' + fdate(s.nextPayday); sub = 'Tap the button when it lands.'; }
+      else { title = 'Was due around ' + fdate(nextDate); sub = 'Tap the button when it lands.'; }
+      const est = diff >= 0 ? estimateFor(nextDate) : null;
+      if (est) sub = (diff >= 1 ? sub + ' · ' : '') + 'about ' + money(Math.round(est)) + (diff >= 1 ? '' : ' expected');
     }
     return '<section class="card next-card" aria-labelledby="next-title">' +
       '<div class="card-head"><h2 class="card-title" id="next-title">Next payday</h2>' +
@@ -903,7 +909,7 @@
     if (latest && latest.date > date) date = latest.date;
     ui.flow = {
       step: s.openItems.length ? 'A' : 'B', fromA: false, editId: null, pdId: null,
-      amount: '', date: date, nextDate: E.pay.guessNext(state.settings, date), nextTouched: false,
+      amount: '', date: date, nextDate: guessNext(date), nextTouched: false,
     };
     go('payday');
   }
@@ -942,11 +948,15 @@
     } else if (pds.length) minDate = pds[pds.length - 1].date;
     const maxDate = minDate && minDate > today() ? minDate : today();
     const usual = state.settings.payAmount;
+    const est = f.editId ? null : estimateFor(f.date);
     return flowTop(f.editId ? 'Fix this payday' : 'Payday', f.fromA) +
       '<form data-submit="paydayGo" novalidate autocomplete="off">' +
       '<h1 class="flow-q"><label for="p-amt">How much hit your bank?</label></h1>' +
       '<div class="field">' + moneyField('p-amt', f.amount === '' ? null : f.amount, { big: true, autofocus: true, enter: 'go' }) +
-      (usual > 0 && !f.editId ? '<div class="chips"><button type="button" class="chip" data-action="fillUsual">Same as usual: ' + esc(money(usual)) + '</button></div>' : '') +
+      ((usual > 0 || est) && !f.editId ? '<div class="chips">' +
+        (est ? '<button type="button" class="chip" data-action="fillEst" data-v="' + est + '">Our estimate: ' + esc(money(est)) + '</button>' : '') +
+        (usual > 0 && !(est && Math.abs(est - usual) < 1) ? '<button type="button" class="chip" data-action="fillUsual">Same as usual: ' + esc(money(usual)) + '</button>' : '') +
+        '</div>' : '') +
       '</div>' +
       '<div class="two two-dates">' +
       '<label class="field"><span class="field-label">Paid on</span><input class="input" type="date" id="p-date" value="' + esc(f.date) + '"' +
@@ -1049,6 +1059,291 @@
     if (!slot) return;
     const w = Math.round(slot.clientWidth) || 340;
     slot.innerHTML = V.chart(summary().series, { width: Math.max(280, w), height: w > 520 ? 240 : 200 });
+  }
+
+
+  // ================================================================== PLAN (§12): paycheck calculator + sandbox
+
+  // "Oct 1–15" (same month) or "Oct 16 – Nov 2".
+  function shortRange(a, b) {
+    if (a.slice(0, 7) === b.slice(0, 7)) return D.fmtShort(a) + '–' + (+b.slice(8, 10));
+    return D.fmtShort(a) + ' – ' + D.fmtShort(b);
+  }
+  function payLagText(ps) {
+    const end = state.settings.payFreq === 'rotation' ? 'you get off the boat' : 'each pay period ends';
+    return 'Payday ' + (ps.lag === 0 ? 'the day ' + end : 'about ' + plural(ps.lag, 'day') + ' after ' + end);
+  }
+  function stubLabel(x) { return fdate(x.date) + (x.days > 0 ? ' · ' + plural(x.days, 'day') : ''); }
+
+  // Upcoming paychecks, skipping one you've already logged.
+  function upcomingList(n) {
+    const pds = state.paydays;
+    let from = today();
+    if (pds.length) { const after = D.addDays(pds[pds.length - 1].date, 4); if (after > from) from = after; }
+    return E.paycheck.upcoming(state, from, n);
+  }
+  // Next payday after `date`: from the pay schedule when Harbor knows it, else the simple guess.
+  function guessNext(date) {
+    const u = E.paycheck.upcoming(state, D.addDays(date, 4), 1);
+    return u.ok && u.list[0] ? u.list[0].payDate : E.pay.guessNext(state.settings, date);
+  }
+  // Estimated take-home for a payday on (or within a few days of) `date`, or null.
+  function estimateFor(date) {
+    const u = E.paycheck.upcoming(state, D.addDays(date, -5), 3);
+    if (!u.ok) return null;
+    const x = u.list.find(function (y) { return y.est && y.est.net > 0 && Math.abs(D.diffDays(y.payDate, date)) <= 5; });
+    return x ? x.est.net : null;
+  }
+
+  function renderPlan() {
+    const ps = E.paycheck.settings(state);
+    const up = upcomingList(6);
+    let h = headHTML('Plan');
+    h += '<h2 class="section-title">Pay setup</h2><div class="card group">' +
+      row('payRate', 'Daily rate', ps.dailyRate ? money(ps.dailyRate) + ' / day' : 'Set it', { small: 'What you earn per day on the boat, before taxes', valueCls: ps.dailyRate ? 'is-amt' : 'is-add' }) +
+      row('paySchedule', 'Pay schedule', freqLabel(state.settings.payFreq), { small: payLagText(ps), valueCls: state.settings.payFreq ? '' : 'is-add' }) +
+      ps.stubs.slice().reverse().map(function (x) {
+        return row('editStub', stubLabel(x), money(x.net) + ' take-home', { id: x.id, small: money(x.gross) + ' earned', valueCls: 'is-amt' });
+      }).join('') +
+      row('addStub', '+ Add a paystub', null, { cls: 'add', noChev: true, small: ps.stubs.length ? null : 'Harbor learns your taxes from your paystubs' }) +
+      (ps.stubs.length ? '' : row('payTax', 'Taxes for now', ps.taxPct + '%', { small: 'Used until you add a paystub' })) +
+      '</div>';
+    h += upcomingHTML(up, ps) + calcHTML(ps) + sandboxHTML(up);
+    return h;
+  }
+
+  function upcomingHTML(up, ps) {
+    let h = '<section class="card" aria-labelledby="up-t"><div class="card-head"><h2 class="card-title" id="up-t">Upcoming paychecks</h2>' +
+      '<span class="card-count">From your rotation</span></div>';
+    if (!up.ok) {
+      return h + '<p class="small-note">' + (up.reason === 'no-freq'
+        ? 'Tell Harbor how often you get paid (above) to see your next paychecks.'
+        : state.settings.payFreq === 'varies'
+          ? 'Your pay schedule is set to "It varies", so there are no set paydays to show. The calculator below still works.'
+          : 'Add one paystub so Harbor can line up your pay periods.') + '</p></section>';
+    }
+    if (!state.settings.boatDate) return h + '<p class="small-note">Add your boat date so Harbor can count your days on the boat.</p></section>';
+    const avg = E.paycheck.average(state, today());
+    h += '<div class="pay-table" role="table" aria-label="Upcoming paychecks">' +
+      '<div class="pt-row pt-head" role="row"><span role="columnheader">Payday</span><span role="columnheader">Period</span>' +
+      '<span role="columnheader">Days</span><span role="columnheader">Take-home</span></div>' +
+      up.list.map(function (x) {
+        const low = x.est && avg && x.est.net < avg * 0.45;
+        return '<button type="button" class="pt-row" role="row" data-action="sbPick" data-date="' + esc(x.payDate) + '" data-amt="' + (x.est ? x.est.net : '') + '"' +
+          ' aria-label="' + esc(fdate(x.payDate) + ': ' + plural(x.days, 'day') + ' on the boat' + (x.est ? ', about ' + money(x.est.net) : '') + '. Try it in the sandbox.') + '">' +
+          '<span role="cell">' + esc(D.fmtShort(x.payDate)) + '</span><span role="cell" class="mut">' + esc(shortRange(x.start, x.end)) + '</span>' +
+          '<span role="cell">' + x.days + '</span>' +
+          '<span role="cell" class="pt-amt">' + (x.est ? esc(fig(x.est.net)) : '—') + (low ? ' <span class="tag is-todo">Low</span>' : '') + '</span></button>';
+      }).join('') + '</div>';
+    if (!ps.dailyRate) h += '<p class="small-note">Set your daily rate to see the amounts.</p>';
+    else {
+      h += '<p class="small-note">Tap a paycheck to try it in the sandbox below.</p>';
+      if (avg) {
+        h += kvHTML('Average paycheck', '≈ ' + money(Math.round(avg)), 'is-amber');
+        if (!(Math.abs((state.settings.payAmount || 0) - avg) < 25)) {
+          h += '<button type="button" class="btn btn-soft btn-small" data-action="useAvg" data-v="' + Math.round(avg) + '">Use ' + esc(money(Math.round(avg))) + ' as my normal paycheck</button>';
+        }
+      }
+    }
+    return h + '</section>';
+  }
+
+  function calcDaysNow(ps) {
+    if (ui.calcDays != null) return ui.calcDays;
+    const last = ps.stubs[ps.stubs.length - 1];
+    return last && last.days > 0 ? last.days : 15;
+  }
+  function calcHTML(ps) {
+    const days = calcDaysNow(ps);
+    return '<section class="card" aria-labelledby="calc-t"><div class="card-head"><h2 class="card-title" id="calc-t">Paycheck calculator</h2></div>' +
+      '<div class="calc-in"><div class="field"><label class="field-label" for="calc-days">Days on the boat</label>' +
+      '<div class="stepper calc-step"><button type="button" class="step-btn" data-action="calcStep" data-delta="-1" aria-label="One day less">−</button>' +
+      '<input class="input" id="calc-days" type="text" inputmode="numeric" autocomplete="off" value="' + days + '" data-live="calcDays">' +
+      '<button type="button" class="step-btn" data-action="calcStep" data-delta="1" aria-label="One day more">+</button></div></div>' +
+      '<label class="field"><span class="field-label">Daily rate</span>' +
+      moneyField('calc-rate', ps.dailyRate, { placeholder: '0' }).replace('<input ', '<input data-live="calcRate" data-change="calcRateSave" ') + '</label></div>' +
+      '<div id="calc-out" aria-live="polite">' + calcOutHTML(days, ps.dailyRate) + '</div></section>';
+  }
+  function calcOutHTML(days, rate) {
+    const r = E.paycheck.forDays(state, days, rate);
+    if (!r) return '<p class="small-note">Type your daily rate to see your take-home.</p>';
+    const ps = E.paycheck.settings(state);
+    return '<div class="calc-out">' + kvHTML('Earnings', fig(r.gross), '') +
+      kvHTML('Taxes & deductions (' + Math.round(r.rate * 100) + '%)', '−' + fig(r.deductions), 'dn') +
+      '<div class="quote calc-take"><span class="lbl">Take-home</span><p class="q-big">' + quoteHTML(r.net) + '</p></div>' +
+      '<p class="small-note">' + esc(r.basis === 'stubs' ? 'Estimated from your ' + plural(r.stubs, 'paystub') + '.'
+        : 'Using ' + ps.taxPct + '% for taxes. Add a paystub above for a sharper number.') + '</p>' +
+      '<button type="button" class="btn btn-soft" data-action="sbFromCalc" data-amt="' + r.net + '">Try it in the sandbox</button></div>';
+  }
+
+  function sandboxHTML(up) {
+    const sb = ui.sandbox;
+    const next = up.ok ? up.list.find(function (x) { return x.est; }) : null;
+    const amt = sb.amount !== '' ? sb.amount : (next ? next.est.net : '');
+    const latest = state.paydays[state.paydays.length - 1];
+    const min = latest ? latest.date : null;
+    let date = sb.date || (next ? next.payDate : today());
+    if (min && date < min) date = min;
+    const ests = up.ok ? up.list.filter(function (x) { return x.est && x.est.net > 0; }) : [];
+    return '<section class="card sandbox" id="sandbox" aria-labelledby="sb-t"><div class="card-head"><h2 class="card-title" id="sb-t">Sandbox · What if</h2>' +
+      '<span class="card-count">Nothing here is saved</span></div>' +
+      '<p class="sb-lead">Try a paycheck and see exactly what to do with it, and what your accounts would look like after.</p>' +
+      '<form data-submit="sbRun" novalidate autocomplete="off"><div class="two two-dates">' +
+      '<label class="field"><span class="field-label">If I get paid</span>' + moneyField('sb-amt', amt === '' ? null : amt, { enter: 'go' }) + '</label>' +
+      '<label class="field"><span class="field-label">On</span><input class="input" type="date" id="sb-date" value="' + esc(date) + '"' + (min ? ' min="' + min + '"' : '') + '></label></div>' +
+      '<div class="btn-row sb-actions"><button type="submit" class="btn btn-primary">Run it</button>' +
+      (ests.length >= 2 ? '<button type="button" class="btn btn-soft" data-action="sbMulti">Next ' + Math.min(3, ests.length) + ' paychecks</button>' : '') +
+      '</div></form>' + (sb.result ? sandboxResultHTML(sb.result, sb.multi) : '') + '</section>';
+  }
+
+  function changeCell(a, b, goodWhenUp) {
+    const d = E.round2((b || 0) - (a || 0));
+    if (Math.abs(d) < 0.005) return '<span class="mut">—</span>';
+    const good = goodWhenUp ? d > 0 : d < 0;
+    return '<span class="' + (good ? 'is-green' : 'dn') + '">' + (d > 0 ? '▲' : '▼') + fig(Math.abs(d)) + '</span>';
+  }
+  function sandboxResultHTML(r, multi) {
+    if (!r.ok) return '<p class="field-error">' + esc(r.error) + '</p>';
+    let h = '<div class="sb-result" aria-live="polite">';
+    if (!multi) {
+      const st = r.steps[0];
+      const status = st.plan.status === 'ok' ? 'ok' : st.plan.status;
+      h += '<div class="sb-block"><span class="lbl">What to do with ' + esc(money(st.amount)) + ' on ' + esc(fdate(st.date)) + '</span>' +
+        '<div class="callout callout-' + status + '"><p>' + esc(st.plan.headline) + '</p></div>' + V.splitBar(st.plan, money) +
+        '<ul class="sb-items">' + st.plan.items.filter(function (it) { return it.amount > 0; }).map(function (it) {
+          return '<li class="k-' + esc(it.kind) + '"><span>' + esc(it.label) + '</span>' + (it.sub ? '<small>' + esc(it.sub) + '</small>' : '') + '</li>';
+        }).join('') + '</ul></div>';
+    } else {
+      h += '<div class="sb-block"><span class="lbl">Paycheck by paycheck</span><div class="pay-table sb-steps" role="table">' +
+        '<div class="pt-row pt-head" role="row"><span role="columnheader">Payday</span><span role="columnheader">Take-home</span>' +
+        '<span role="columnheader">Saved after</span><span role="columnheader">Owe after</span></div>' +
+        r.steps.map(function (st) {
+          return '<div class="pt-row" role="row"><span role="cell">' + esc(D.fmtShort(st.date)) + (st.plan.status !== 'ok' ? ' <span class="tag is-todo">' + esc(st.plan.status) + '</span>' : '') + '</span>' +
+            '<span role="cell">' + esc(fig(st.amount)) + '</span><span role="cell" class="is-green">' + esc(fig(st.after.savings)) + '</span>' +
+            '<span role="cell">' + esc(fig(st.after.totalDebt)) + '</span></div>';
+        }).join('') + '</div></div>';
+    }
+    // Accounts: now → after.
+    const rows = [['Savings', r.before.savings, r.after.savings, true]];
+    if (r.after.spending != null) rows.push(['Spending money', r.before.spending, r.after.spending, true]);
+    if (r.after.checking != null && r.before.checking != null) rows.push(['Checking', r.before.checking, r.after.checking, true]);
+    r.before.debts.forEach(function (d) {
+      const a = r.after.debts.find(function (x) { return x.id === d.id; });
+      if (!a || (d.balance < 0.005 && a.balance < 0.005)) return;
+      rows.push([d.name, d.balance, a.balance, false]);
+    });
+    h += '<div class="sb-block"><span class="lbl">Your accounts</span><div class="pay-table sb-acc" role="table">' +
+      '<div class="pt-row pt-head" role="row"><span role="columnheader">Account</span><span role="columnheader">Now</span>' +
+      '<span role="columnheader">After</span><span role="columnheader">Change</span></div>' +
+      rows.map(function (x) {
+        return '<div class="pt-row" role="row"><span role="cell">' + esc(x[0]) + '</span><span role="cell" class="mut">' + esc(fig(x[1] || 0)) + '</span>' +
+          '<span role="cell">' + esc(fig(x[2] || 0)) + '</span><span role="cell">' + changeCell(x[1], x[2], x[3]) + '</span></div>';
+      }).join('') + '</div>';
+    const fd = function (d) { return d ? D.fmtMonthYear(d) : '—'; };
+    if (r.debtFreeBefore || r.debtFreeAfter) {
+      h += kvHTML('Debt-free target', r.debtFreeBefore === r.debtFreeAfter ? fd(r.debtFreeAfter) : fd(r.debtFreeBefore) + ' → ' + fd(r.debtFreeAfter), 'is-amber');
+    }
+    h += '</div>';
+    r.warnings.filter(function (w) { return w.status === 'short' || w.shortBy >= 50; }).forEach(function (w) {
+      h += '<p class="sb-warn"><span class="lbl">Heads up</span>Your ' + esc(fdate(w.date)) + ' paycheck looks ' +
+        (w.status === 'short' ? esc(money(Math.ceil(w.shortBy))) + ' short of your bills' : 'tight for spending') +
+        '. From the paycheck before it, keep about ' + esc(money(Math.ceil(w.shortBy))) + ' extra in checking.</p>';
+    });
+    return h + '<p class="small-note">A practice run that follows each plan exactly. Your real data hasn\'t changed.</p></div>';
+  }
+
+  function runSandbox(list, multi) {
+    ui.sandbox.multi = !!multi;
+    ui.sandbox.result = E.sandbox(state, today(), list, { money: money });
+    render();
+    const el = $('sandbox');
+    if (el) { try { el.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); } }
+  }
+
+  // --- pay setup sheets
+  function openScheduleSheet() {
+    const ps = E.paycheck.settings(state);
+    let opts = '';
+    for (let d = 0; d <= 21; d++) opts += '<option value="' + d + '"' + (d === ps.lag ? ' selected' : '') + '>' + (d === 0 ? 'The same day' : plural(d, 'day') + ' after') + '</option>';
+    const html = sheetHead('When you get paid', domId('sch')) +
+      '<form data-lsubmit novalidate autocomplete="off">' +
+      '<div class="field"><span class="field-label">How often</span><button type="button" class="row as-field" data-la="freq">' +
+      '<span class="row-label">' + esc(freqLabel(state.settings.payFreq)) + '</span><span class="chev" aria-hidden="true">›</span></button></div>' +
+      '<label class="field"><span class="field-label">Payday comes</span><select class="select" id="sch-lag">' + opts + '</select>' +
+      '<span class="field-help">How long after a pay period ends the money lands. On your pay app, compare the pay date with the period dates.</span></label>' +
+      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div></form>';
+    openLayer(html, {
+      actions: { freq: function (el, entry) { closeLayer(entry); openFreqSheet(); } },
+      onSubmit: function (form, entry) {
+        E.act.setPay(state, { lag: parseInt($('sch-lag').value, 10) || 0 });
+        save(); closeLayer(entry); render(); toast('Saved.');
+      },
+    });
+  }
+
+  function openTaxSheet() {
+    const ps = E.paycheck.settings(state);
+    const html = sheetHead('Taxes for now', domId('tx')) +
+      '<p class="sheet-lead">Until you add a paystub, Harbor takes this share off for taxes and deductions.</p>' +
+      '<form data-lsubmit novalidate autocomplete="off"><label class="field"><span class="field-label">Percent</span>' +
+      '<input class="input" id="tx-pct" type="text" inputmode="decimal" autocomplete="off" value="' + ps.taxPct + '"></label>' +
+      '<div class="sheet-actions"><button type="submit" class="btn btn-primary">Save</button></div></form>';
+    openLayer(html, {
+      onSubmit: function (form, entry) {
+        clearErrors(entry.box);
+        const n = parseMoney($('tx-pct').value.replace('%', ''));
+        if (!(n >= 0 && n <= 60)) { setError('tx-pct', 'Pick a number from 0 to 60.'); return; }
+        E.act.setPay(state, { taxPct: n });
+        save(); closeLayer(entry); render(); toast('Saved.');
+      },
+    });
+  }
+
+  function openStubSheet(id) {
+    const ps = E.paycheck.settings(state);
+    const x = id ? ps.stubs.find(function (y) { return y.id === id; }) : null;
+    if (id && !x) return;
+    const cur = x || { date: today(), days: null, gross: null, net: null };
+    const html = sheetHead(x ? 'Edit paystub' : 'Add a paystub', domId('stub')) +
+      '<p class="sheet-lead">Copy these from your pay app. Harbor learns your taxes from them — two or three paystubs is plenty.</p>' +
+      '<form data-lsubmit novalidate autocomplete="off">' +
+      '<label class="field"><span class="field-label">Pay date</span><input class="input" type="date" id="st-date" value="' + esc(cur.date) + '"></label>' +
+      '<label class="field"><span class="field-label">Days on the boat</span><input class="input" id="st-days" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 15" value="' + esc(cur.days == null ? '' : numStr(cur.days)) + '">' +
+      '<span class="field-help">Shown as "Hours" on your pay app.</span></label>' +
+      '<label class="field"><span class="field-label">Earnings (before taxes)</span>' + moneyField('st-gross', cur.gross, { enter: 'next', placeholder: ps.dailyRate ? 'days × ' + numStr(ps.dailyRate) : '0' }) + '</label>' +
+      '<label class="field"><span class="field-label">Take-home (net pay)</span>' + moneyField('st-net', cur.net) + '</label>' +
+      '<div class="sheet-actions' + (x ? ' has-del' : '') + '"><button type="submit" class="btn btn-primary">Save</button>' +
+      (x ? '<button type="button" class="btn btn-danger btn-del" data-la="del" aria-label="Delete this paystub">Delete</button>' : '') + '</div></form>';
+    openLayer(html, {
+      actions: {
+        del: function (el, entry) {
+          confirmBox('Delete this paystub?', stubLabel(x) + ' · ' + money(x.net) + ' take-home.', 'Delete it', 'Keep it', true).then(function (yes) {
+            if (!yes) return;
+            E.act.deletePaystub(state, x.id);
+            save(); closeLayer(entry); render(); toast('Paystub deleted.');
+          });
+        },
+      },
+      onSubmit: function (form, entry) {
+        clearErrors(entry.box);
+        const daysRaw = $('st-days').value.trim();
+        const days = daysRaw === '' ? 0 : parseMoney(daysRaw);
+        const gross = parseMoney($('st-gross').value);
+        const net = parseMoney($('st-net').value);
+        if (Number.isNaN(days) || days < 0) { setError('st-days', 'Type the number of days, like 15.'); return; }
+        if (Number.isNaN(gross)) { setError('st-gross', 'That doesn\'t look like an amount.'); return; }
+        if (net === null || !(net > 0)) { setError('st-net', 'Type the take-home (net pay), like 1850.50.'); return; }
+        const input = { date: $('st-date').value, days: days, gross: gross, net: net };
+        try {
+          if (x) E.act.editPaystub(state, x.id, input); else E.act.addPaystub(state, input);
+        } catch (err) {
+          const msg = (err && err.message) || 'Something didn\'t work. Try again.';
+          setError(/date/.test(msg) ? 'st-date' : /earnings/i.test(msg) ? 'st-gross' : 'st-net', msg);
+          return;
+        }
+        save(); closeLayer(entry); render(); toast(x ? 'Saved.' : 'Paystub added. Your estimates just got sharper.');
+      },
+    });
   }
 
   // ================================================================== MONEY (§10.9)
@@ -1507,7 +1802,8 @@
 
     h += '<h2 class="section-title">Pay</h2><div class="card group">' +
       row('editPay', 'Normal paycheck', s.payAmount > 0 ? money(s.payAmount) : 'Not set') +
-      row('editFreq', 'How often', freqLabel(s.payFreq)) + '</div>';
+      row('editFreq', 'How often', freqLabel(s.payFreq)) +
+      row('go', 'Daily rate & paystubs', E.paycheck.settings(state).dailyRate ? money(E.paycheck.settings(state).dailyRate) + ' / day' : 'Set up', { small: 'Paycheck calculator and sandbox are under Plan' }).replace('data-action="go"', 'data-action="go" data-to="plan"') + '</div>';
 
     h += '<h2 class="section-title">Bills</h2><div class="card group">' +
       state.bills.map(function (b) {
@@ -1579,7 +1875,7 @@
 
   // ================================================================== RENDER + ROUTER
 
-  const SCREENS = { setup: renderSetup, today: renderToday, payday: renderPayday, money: renderMoney, voyage: renderVoyage, settings: renderSettings };
+  const SCREENS = { setup: renderSetup, today: renderToday, payday: renderPayday, money: renderMoney, plan: renderPlan, voyage: renderVoyage, settings: renderSettings };
 
   function render() {
     if (!state.setupDone) ui.screen = 'setup';
@@ -1601,10 +1897,10 @@
   function cssEsc(s) { return String(s).replace(/["\\]/g, '\\$&'); }
 
   function renderTabs() {
-    const show = state.setupDone && (ui.screen === 'today' || ui.screen === 'money' || ui.screen === 'voyage' || ui.screen === 'settings');
+    const show = state.setupDone && (ui.screen === 'today' || ui.screen === 'money' || ui.screen === 'plan' || ui.screen === 'voyage' || ui.screen === 'settings');
     $tabs.hidden = !show;
     if (!show) { $tabs.innerHTML = ''; return; }
-    const tabs = [['today', 'Today'], ['money', 'Money'], ['voyage', 'Progress'], ['settings', 'Settings']];
+    const tabs = [['today', 'Today'], ['money', 'Money'], ['plan', 'Plan'], ['voyage', 'Progress'], ['settings', 'Settings']];
     $tabs.innerHTML = '<div class="tabs-inner">' + tabs.map(function (t, i) {
       const on = ui.screen === t[0];
       return '<button type="button" class="tab" data-action="go" data-to="' + t[0] + '"' + (on ? ' aria-current="page"' : '') + '>' +
@@ -2468,6 +2764,7 @@
     },
     flowBack: function () { if (ui.flow) { ui.flow.step = 'A'; render(); window.scrollTo(0, 0); } },
     flowContinue: function () { ui.flow.step = 'B'; ui.flow.fromA = true; render(); window.scrollTo(0, 0); const a = $('p-amt'); if (a) a.focus(); },
+    fillEst: function (el) { const a = $('p-amt'); if (a) { a.value = numStr(Number(el.dataset.v)); a.focus(); } },
     fillUsual: function () { const a = $('p-amt'); if (a) { a.value = numStr(state.settings.payAmount); a.focus(); } },
     tipDone: function () { state.meta.tips.spendingCard = true; save(); render(); },
 
@@ -2510,6 +2807,49 @@
     },
     restore: function () { startRestore(); },
     startOver: function () { startOver(); },
+    // --- Plan (§12)
+    payRate: function () {
+      const ps = E.paycheck.settings(state);
+      openMoneySheet({ title: 'Daily rate', label: 'What you earn per day on the boat, before taxes', value: ps.dailyRate, example: '300', positive: true,
+        help: 'On your pay app it\'s Earnings ÷ Hours.',
+        save: function (n) { E.act.setPay(state, { dailyRate: n }); } });
+    },
+    paySchedule: function () { openScheduleSheet(); },
+    payTax: function () { openTaxSheet(); },
+    addStub: function () { openStubSheet(null); },
+    editStub: function (el) { openStubSheet(el.dataset.id); },
+    calcStep: function (el) {
+      const ps = E.paycheck.settings(state);
+      ui.calcDays = Math.max(0, Math.min(31, Math.round(calcDaysNow(ps) + Number(el.dataset.delta))));
+      const d = $('calc-days'); if (d) d.value = ui.calcDays;
+      const rateEl = $('calc-rate');
+      const rate = rateEl ? parseMoney(rateEl.value) : null;
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : ps.dailyRate);
+    },
+    sbPick: function (el) {
+      const amt = Number(el.dataset.amt);
+      if (!(amt > 0)) { toast('Set your daily rate first.'); return; }
+      ui.sandbox.amount = amt; ui.sandbox.date = el.dataset.date;
+      runSandbox([{ date: el.dataset.date, amount: amt }], false);
+    },
+    sbFromCalc: function (el) {
+      const amt = Number(el.dataset.amt);
+      if (!(amt > 0)) return;
+      const up = upcomingList(1);
+      ui.sandbox.amount = amt;
+      ui.sandbox.date = up.ok && up.list[0] ? up.list[0].payDate : today();
+      runSandbox([{ date: ui.sandbox.date, amount: amt }], false);
+    },
+    sbMulti: function () {
+      const up = upcomingList(6);
+      const list = up.list.filter(function (x) { return x.est && x.est.net > 0; }).slice(0, 3).map(function (x) { return { date: x.payDate, amount: x.est.net }; });
+      if (list.length < 2) return;
+      runSandbox(list, true);
+    },
+    useAvg: function (el) {
+      state.settings.payAmount = Number(el.dataset.v);
+      save(); render(); toast('Your normal paycheck is now ' + money(state.settings.payAmount) + '.');
+    },
   };
 
   // Live input handlers (data-live), fired on every keystroke / change.
@@ -2536,10 +2876,22 @@
       const next = $('p-next');
       if (next) {
         next.min = D.addDays(el.value, 1);
-        if (!f.nextTouched) { f.nextDate = E.pay.guessNext(state.settings, el.value); next.value = f.nextDate; }
+        if (!f.nextTouched) { f.nextDate = guessNext(el.value); next.value = f.nextDate; }
       }
     },
     payNext: function (el) { if (ui.flow) { ui.flow.nextTouched = true; ui.flow.nextDate = el.value; } },
+    calcDays: function (el) {
+      const n = parseInt(String(el.value).replace(/[^\d]/g, ''), 10);
+      ui.calcDays = Number.isFinite(n) ? Math.max(0, Math.min(31, n)) : 0;
+      const ps = E.paycheck.settings(state);
+      const rateEl = $('calc-rate');
+      const rate = rateEl ? parseMoney(rateEl.value) : null;
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : ps.dailyRate);
+    },
+    calcRate: function (el) {
+      const rate = parseMoney(el.value);
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(calcDaysNow(E.paycheck.settings(state)), rate > 0 ? rate : null);
+    },
     share: function (el) {
       const share = 1 - Number(el.value) / 10;
       const t = shareText(share);
@@ -2550,6 +2902,12 @@
 
   // Change handlers (data-change): fire when a control is let go.
   const CHANGE = {
+    calcRateSave: function (el) {
+      const rate = parseMoney(el.value);
+      if (!(rate > 0) || rate === E.paycheck.settings(state).dailyRate) return;
+      E.act.setPay(state, { dailyRate: rate });
+      save(); render(); toast('Daily rate saved: ' + money(rate) + ' a day.');
+    },
     shareSave: function (el) {
       state.settings.debtShare = Math.round((1 - Number(el.value) / 10) * 10) / 10;
       save();
@@ -2560,6 +2918,15 @@
   // Form submits (data-submit).
   const SUBMIT = {
     setupNext: function () { setupNext(); },
+    sbRun: function () {
+      clearErrors($app);
+      const amt = parseMoney($('sb-amt').value);
+      const date = $('sb-date').value;
+      if (!(amt > 0)) { setError('sb-amt', 'Type an amount to try, like 2000.'); return; }
+      if (!D.isValid(date)) { setError('sb-date', 'Pick a payday.'); return; }
+      ui.sandbox.amount = amt; ui.sandbox.date = date;
+      runSandbox([{ date: date, amount: amt }], false);
+    },
     paydayGo: function () {
       const f = ui.flow;
       if (!f) return;
@@ -2574,7 +2941,7 @@
       if (!D.isValid(date)) { setError('p-date', 'Pick the day you got paid.'); return; }
       const max = $('p-date').max;
       if (max && date > max) { setError('p-date', 'That day hasn\'t happened yet — pick today or earlier.'); return; }
-      if (!D.isValid(next)) next = E.pay.guessNext(state.settings, date);
+      if (!D.isValid(next)) next = guessNext(date);
       if (next <= date) { setError('p-next', 'Your next payday needs to be after this one.'); return; }
       try {
         if (f.editId) {

@@ -1822,3 +1822,69 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .8; filter: inv
 .sheet-actions.has-del { grid-template-columns: minmax(0, 1fr) auto; }
 .btn-del { width: auto; padding-left: 20px; padding-right: 20px; }
 .cheer-backup { font-size: 15px; margin: 12px 0 10px; color: var(--text); }
+
+/* ================================================================== PLAN (§12) */
+.tabs-inner { grid-template-columns: repeat(5, 1fr); }
+.tab { font-size: 10.5px; letter-spacing: .9px; }
+@media (min-width: 420px) { .tab { font-size: 11.5px; letter-spacing: 1.3px; } }
+
+/* Terminal tables: upcoming pay, sandbox steps, accounts now → after. */
+.pay-table { margin-top: 10px; border-top: 1px solid var(--line); }
+.pt-row {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.25fr) minmax(0, .55fr) minmax(0, 1.2fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+.pt-row > span:nth-child(n+3) { text-align: right; }
+button.pt-row { cursor: pointer; }
+button.pt-row:active { background: var(--panel-2); }
+.pt-head { min-height: 0; padding: 6px 2px; font-size: 10.5px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase; color: var(--muted); }
+.pt-amt { color: var(--text); font-weight: 700; white-space: nowrap; }
+.pt-amt .tag { margin-left: 4px; font-size: 9.5px; padding: 2px 5px; vertical-align: 1px; }
+.pt-row .mut { color: var(--muted); }
+.sb-steps .pt-row, .sb-acc .pt-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
+.sb-acc .pt-row > span:first-child { font-family: var(--font); font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+.sb-acc .pt-head > span:first-child { font-family: var(--mono); font-size: 10.5px; }
+.sb-steps .tag { font-size: 9px; padding: 1px 4px; text-transform: uppercase; }
+
+/* Calculator */
+.calc-in { display: grid; grid-template-columns: 1fr; gap: 4px; margin-top: 6px; }
+@media (min-width: 520px) { .calc-in { grid-template-columns: 1fr 1fr; gap: 14px; align-items: end; } }
+.calc-step { margin-top: 0; grid-template-columns: 52px 1fr 52px; }
+.calc-step .input { text-align: center; font-family: var(--mono); font-size: 22px; font-weight: 700; }
+.calc-step .step-btn { min-height: 50px; font-size: 22px; }
+.calc-out { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.calc-take { margin: 10px 0 2px; }
+.calc-take .q-big { color: var(--green); font-size: 40px; }
+.calc-out .btn { margin-top: 12px; }
+
+/* Sandbox */
+.sandbox { border-left: 3px solid var(--cyan); }
+.sb-lead { font-size: 15px; color: var(--muted); margin: 6px 0 12px; }
+.sb-actions { margin-top: 4px; }
+.sb-result { margin-top: 18px; padding-top: 4px; border-top: 1px dashed var(--line); }
+.sb-block { margin-top: 14px; }
+.sb-block > .lbl { display: block; margin-bottom: 6px; }
+.sb-block .callout { margin: 6px 0 10px; }
+.sb-items { list-style: none; margin: 10px 0 0; padding: 0; }
+.sb-items li { padding: 9px 0 9px 12px; border-bottom: 1px solid var(--line); border-left: 3px solid var(--line); font-size: 15px; font-weight: 600; }
+.sb-items li small { display: block; margin-top: 2px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.sb-items li.k-bills { border-left-color: var(--cyan); }
+.sb-items li.k-spend { border-left-color: var(--amber); }
+.sb-items li.k-debt, .sb-items li.k-save { border-left-color: var(--green); }
+.sb-block .kv { margin-top: 10px; }
+.sb-warn { margin-top: 14px; padding: 10px 12px; border-radius: 4px; background: var(--panel); border-left: 3px solid var(--amber); font-size: 15px; color: var(--text); }
+.sb-warn .lbl { display: block; color: var(--amber); margin-bottom: 3px; }
+.row.as-field { width: 100%; border-radius: 5px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }

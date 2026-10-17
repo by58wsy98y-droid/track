@@ -745,3 +745,45 @@ terse uppercase labels are fine, finance jargon is not (no P&L, liquidity, bps, 
 - Remove emoji from every user-facing engine string (labels, why, headline, note, compare text, recap titles, milestone
   title/message; e.g. "— that clears it!", "Back out to sea"). Keep the `emoji` fields for compatibility but set them to
   a plain glyph ('★'). Update tests.
+
+## 12. PLAN tab — paycheck calculator and sandbox (v6)
+
+Paid per day on the boat ("Hours" on the pay app = days on the boat). Tabs become F1 TODAY · F2 MONEY · **F3 PLAN** ·
+F4 PROGRESS · F5 SETTINGS. Everything optional; old data without `state.pay` behaves exactly as before.
+
+### 12.1 Data
+- `state.pay = { dailyRate, lag, taxPct, stubs: [{ id, date, days, gross, net }] }`, created on first edit.
+  `lag` = days from the end of a pay period to payday (default 7). `taxPct` (default 20, max 60) is used only with no stubs.
+  A stub's `gross` defaults to days × dailyRate; `net` must be > 0 and ≤ gross. Stubs are kept sorted by date.
+- `normalizeState` / backups keep `pay` only when present; invalid stubs are dropped.
+
+### 12.2 Engine (`Engine.paycheck`, `Engine.sandbox`)
+- `estimate(state, gross)` → `{ gross, deductions, net, rate, basis: 'stubs'|'default', stubs }`. With stubs:
+  deductions are piecewise-linear through (0, 0) and each stub's (gross, gross − net), extended past the largest stub
+  with the last slope (capped at 0.6); always capped at 60% of gross. A gross equal to a stub's reproduces it exactly.
+- `forDays(state, days, rate?)` → estimate for days × rate, or null with no rate.
+- `periods(state, from, to)` → pay periods: twice a month = 1st–15th and 16th–month end; monthly = calendar month;
+  weekly / every 2 weeks anchored on the latest stub or payday date − lag; once per rotation = each boat stretch;
+  "it varies" → null.
+- `upcoming(state, today, n)` → `{ ok, reason: 'no-freq'|'no-anchor'|null, list: [{ start, end, payDate, days,
+  homeDays, est }] }` where payDate = period end + lag and days = boat days in the period (rotation.countDays).
+- `average(state, today)` → mean estimated take-home of the next 12 paychecks.
+- `sandbox(state, today, [{ date, amount }])` → deep-copies the data, adds each paycheck and ticks every plan item,
+  then reports `{ before, steps: [{ date, amount, plan, after }], after, debtFreeBefore/After, safeHarborBefore/After,
+  warnings: [{ date, status, shortBy }] }`. Snapshots hold savings, total debt, each debt, spending pot, checking.
+  Dates before the latest real payday are refused. Nothing is saved.
+
+### 12.3 Screen
+- **Pay setup:** Daily rate · Pay schedule (how often + "payday about N days after each pay period ends") · paystubs
+  (newest first, tap to edit/delete; Delete sits beside Save) · + Add a paystub · "Taxes for now" (only with no stubs).
+- **Upcoming paychecks:** PAYDAY · PERIOD · DAYS · TAKE-HOME (6 rows, skipping a payday already logged), LOW tag under
+  45% of the average. Tap a row → runs it in the sandbox. Average + "Use $X as my normal paycheck".
+- **Paycheck calculator:** days stepper (0–31) + daily rate (live while typing, saved on leaving the box). Shows
+  earnings, taxes & deductions (with %), big green take-home, basis note, "Try it in the sandbox".
+- **Sandbox:** amount + date, Run it, "Next 3 paychecks". Single run: plan headline, split bar, the to-do items.
+  Multi: payday-by-payday table (take-home, saved after, owe after). Both: accounts NOW · AFTER · CHANGE, debt-free
+  target before → after, a heads-up for any short (or ≥ $50 tight) paycheck: "keep about $X extra in checking from the
+  paycheck before it". Footer: "Your real data hasn't changed."
+- **Elsewhere:** Today's next-payday card adds "about $X" from the schedule (and uses the schedule when no payday is
+  logged yet). The payday flow adds an "Our estimate: $X" chip and guesses the next payday from the schedule.
+  Settings → Pay links to Plan.
