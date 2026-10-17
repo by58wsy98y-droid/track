@@ -2227,3 +2227,131 @@ test('§11.2 no emoji in any user-facing engine text', () => {
   assert.ok(texts.length > 40);
   texts.forEach((t) => assert.ok(!EMOJI.test(t), 'emoji in: ' + t));
 });
+
+// ---------------------------------------------------------------- §12 paycheck calculator + sandbox
+
+function payState() {
+  const s = base({ settings: { payFreq: 'semimonthly' } });
+  E.act.setPay(s, { dailyRate: 300 });
+  return s;
+}
+
+test('§12 estimate: default 20% with no paystubs, a flat rate with one, a line through several', () => {
+  const s = payState();
+  let e = E.paycheck.estimate(s, 1000);
+  assert.deepEqual([e.deductions, e.net, e.basis], [200, 800, 'default']);
+  E.act.setPay(s, { taxPct: 25 });
+  assert.equal(E.paycheck.estimate(s, 1000).net, 750);
+  E.act.addPaystub(s, { date: '2026-09-07', days: 2, gross: 600, net: 510 });          // 15% off
+  e = E.paycheck.estimate(s, 1200);
+  assert.deepEqual([e.deductions, e.net, e.basis, e.stubs], [180, 1020, 'stubs', 1]);
+  E.act.addPaystub(s, { date: '2026-09-22', days: 10, gross: 3000, net: 2300 });       // 700 off
+  E.act.addPaystub(s, { date: '2026-10-07', days: 14, gross: 4200, net: 3100 });       // 1100 off
+  // Exact at each paystub…
+  assert.equal(E.paycheck.estimate(s, 600).net, 510);
+  assert.equal(E.paycheck.estimate(s, 3000).net, 2300);
+  assert.equal(E.paycheck.estimate(s, 4200).net, 3100);
+  // …a straight line in between (600→90 off, 3000→700 off: 1800 is halfway → 395 off)…
+  assert.equal(E.paycheck.estimate(s, 1800).deductions, 395);
+  // …through (0, 0) below the smallest…
+  assert.equal(E.paycheck.estimate(s, 300).deductions, 45);
+  // …and the last slope (400/1200 = 1/3) above the biggest.
+  assert.equal(E.paycheck.estimate(s, 4800).deductions, 1300);
+  assert.equal(E.paycheck.estimate(s, 0).net, 0);
+  // Deductions never pass 60% of gross.
+  const t = payState();
+  E.act.addPaystub(t, { date: '2026-09-07', gross: 100, net: 95 });
+  E.act.addPaystub(t, { date: '2026-09-22', gross: 200, net: 100 });
+  // slope (100−5)/100 = 0.95 is capped at 0.6 past the biggest stub: 100 + 9800 × 0.6 = 5,980 (and ≤ 60% overall).
+  assert.equal(E.paycheck.estimate(t, 10000).deductions, 5980);
+  assert.ok(E.paycheck.estimate(t, 10000).rate <= 0.6);
+});
+
+test('§12 forDays and paystub validation', () => {
+  const s = payState();
+  const r = E.paycheck.forDays(s, 10);
+  assert.deepEqual([r.days, r.dailyRate, r.gross, r.net], [10, 300, 3000, 2400]);
+  assert.equal(E.paycheck.forDays(s, 10, 250).gross, 2500);
+  assert.equal(E.paycheck.forDays(base(), 10), null, 'no daily rate yet');
+  assert.throws(() => E.act.addPaystub(s, { date: 'x', days: 2, net: 500 }), /pay date/);
+  assert.throws(() => E.act.addPaystub(s, { date: '2026-09-07', days: 2 }), /take-home/);
+  assert.throws(() => E.act.addPaystub(s, { date: '2026-09-07', days: 2, gross: 500, net: 600 }), /more than earnings/);
+  const st = E.act.addPaystub(s, { date: '2026-09-07', days: 2, net: 500 });               // gross from the daily rate
+  assert.equal(st.gross, 600);
+  E.act.editPaystub(s, st.id, { date: '2026-09-07', days: 2, gross: 620, net: 520 });
+  assert.equal(s.pay.stubs[0].gross, 620);
+  E.act.deletePaystub(s, st.id);
+  assert.equal(s.pay.stubs.length, 0);
+  assert.throws(() => E.act.addPaystub(base(), { date: '2026-09-07', days: 2, net: 500 }), /earnings/);
+});
+
+test('§12 pay periods: twice a month, monthly, every 2 weeks (lined up by a paystub), per rotation', () => {
+  const s = payState();
+  assert.deepEqual(E.paycheck.periods(s, '2026-10-10', '2026-11-20'),
+    [{ start: '2026-10-01', end: '2026-10-15' }, { start: '2026-10-16', end: '2026-10-31' }, { start: '2026-11-01', end: '2026-11-15' }]);
+  s.settings.payFreq = 'monthly';
+  assert.deepEqual(E.paycheck.periods(s, '2027-02-01', '2027-03-31'),
+    [{ start: '2027-02-01', end: '2027-02-28' }, { start: '2027-03-01', end: '2027-03-31' }]);
+  s.settings.payFreq = 'biweekly';
+  assert.equal(E.paycheck.periods(s, '2026-10-01', '2026-11-01'), null, 'needs a paystub or payday to line up');
+  E.act.addPaystub(s, { date: '2026-10-09', days: 5, net: 1200 });                       // its period ended Oct 2
+  assert.deepEqual(E.paycheck.periods(s, '2026-10-01', '2026-10-31').map((p) => p.end), ['2026-10-02', '2026-10-16', '2026-10-30']);
+  s.settings.payFreq = 'rotation';
+  assert.deepEqual(E.paycheck.periods(s, '2026-10-01', '2026-12-31'),
+    [{ start: '2026-09-08', end: '2026-10-05' }, { start: '2026-10-20', end: '2026-11-16' }, { start: '2026-12-01', end: '2026-12-28' }]);
+  s.settings.payFreq = null;
+  assert.equal(E.paycheck.periods(s, '2026-10-01', '2026-12-31'), null);
+});
+
+test('§12 upcoming paychecks count boat days from the rotation', () => {
+  const s = payState();                                     // boat Sep 8 – Oct 5, home Oct 6 – 19, boat Oct 20 – Nov 16
+  const u = E.paycheck.upcoming(s, '2026-10-17', 4);
+  assert.equal(u.ok, true);
+  assert.deepEqual(u.list.map((x) => [x.payDate, x.days]),
+    [['2026-10-22', 5], ['2026-11-07', 12], ['2026-11-22', 15], ['2026-12-07', 1]]);
+  assert.deepEqual([u.list[0].est.gross, u.list[0].est.net], [1500, 1200]);
+  E.act.setPay(s, { lag: 4 });
+  assert.equal(E.paycheck.upcoming(s, '2026-10-17', 1).list[0].payDate, '2026-10-19');
+  assert.ok(E.paycheck.average(s, '2026-10-17') > 0);
+  const n = base({ settings: { payFreq: null } });
+  assert.deepEqual([E.paycheck.upcoming(n, '2026-10-17').ok, E.paycheck.upcoming(n, '2026-10-17').reason], [false, 'no-freq']);
+  const nr = base({ settings: { payFreq: 'semimonthly' } });
+  assert.equal(E.paycheck.upcoming(nr, '2026-10-17', 2).list[0].est, null, 'no daily rate: periods but no estimate');
+});
+
+test('§12 sandbox: a practice run on a copy — plans, balances after, warnings, nothing saved', () => {
+  const s = payState();
+  const before = JSON.stringify(s);
+  const sb = E.sandbox(s, '2026-10-01', [{ date: '2026-10-01', amount: 2000, nextDate: '2026-10-15' }]);
+  assert.equal(sb.ok, true);
+  assert.equal(JSON.stringify(s), before, 'the real data is untouched');
+  // Same as SPEC P1, except twice-a-month pay spreads the yearly bill over 11 paydays (240/11 = 21.82).
+  assert.deepEqual(sb.steps[0].plan.items.map((i) => [i.key, i.amount]), [['bills', 292], ['spend', 950], ['save', 758]]);
+  assert.deepEqual([sb.before.savings, sb.after.savings], [200, 958]);
+  // Several paychecks in a row, with a short one flagged.
+  const many = E.sandbox(s, '2026-10-01', [
+    { date: '2026-10-01', amount: 2000 }, { date: '2026-10-15', amount: 2000 }, { date: '2026-10-29', amount: 40 }]);
+  assert.equal(many.steps.length, 3);
+  assert.equal(many.steps[0].nextDate, '2026-10-15', 'each paycheck runs until the next one');
+  assert.ok(many.after.totalDebt < many.before.totalDebt);
+  assert.deepEqual(many.warnings.map((w) => [w.date, w.status]), [['2026-10-29', 'short']]);
+  assert.ok(many.warnings[0].shortBy > 0);
+  assert.equal(E.sandbox(s, '2026-10-01', []).ok, false);
+  assert.equal(E.sandbox(s, '2026-10-01', [{ date: '2026-10-01', amount: 0 }]).ok, false);
+});
+
+test('§12 pay setup survives save/restore, and old data without it stays the same', () => {
+  const s = payState();
+  E.act.addPaystub(s, { date: '2026-10-07', days: 14, gross: 4200, net: 3100 });
+  const back = E.readBackup(JSON.stringify(E.makeBackup(s, '2026-10-08')), '2026-10-08');
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.state.pay, s.pay);
+  const n = E.normalizeState(JSON.parse(JSON.stringify(base())), '2026-10-01');
+  assert.equal('pay' in n.state, false);
+  const bad = JSON.parse(JSON.stringify(s));
+  bad.pay.stubs.push({ date: 'nope', net: 5 }, { date: '2026-10-01', gross: 10, net: 20 }, 'junk');
+  bad.pay.dailyRate = -3; bad.pay.lag = 99;
+  const nb = E.normalizeState(bad, '2026-10-08');
+  assert.equal(nb.ok, true);
+  assert.deepEqual([nb.state.pay.stubs.length, nb.state.pay.dailyRate, nb.state.pay.lag], [1, null, 7]);
+});

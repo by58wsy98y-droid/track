@@ -1563,6 +1563,185 @@
     return { stops, position };
   }
 
+
+  // ---------------------------------------------------------------- paycheck calculator + sandbox (§12)
+  // Pay setup lives in its own optional object, state.pay = { dailyRate, lag, taxPct, stubs: [...] },
+  // so older data (and backups) stay exactly as they were until the user sets it up.
+
+  function payOf(state) {
+    const p = isObj(state.pay) ? state.pay : {};
+    return {
+      dailyRate: p.dailyRate > 0 ? round2(num(p.dailyRate)) : null,
+      lag: intIn(p.lag, 0, 31, 7),                     // payday ≈ this many days after a pay period ends
+      taxPct: p.taxPct == null || !(num(p.taxPct) >= 0) ? 20 : Math.min(60, num(p.taxPct)),
+      stubs: Array.isArray(p.stubs) ? p.stubs.filter((x) => isObj(x) && num(x.gross) > 0 && num(x.net) > 0 && num(x.net) <= num(x.gross)) : [],
+    };
+  }
+
+  // Taxes and deductions for a gross amount, learned from the user's own paystubs:
+  // a straight line through (0, 0) and each stub, carried on past the biggest one at its last slope.
+  // No stubs yet → taxPct (default 20%).
+  function estimateNet(state, gross) {
+    gross = round2(Math.max(0, num(gross)));
+    const ps = payOf(state);
+    const byGross = {};
+    ps.stubs.forEach((x) => {
+      const g = round2(num(x.gross));
+      (byGross[g] = byGross[g] || []).push(round2(num(x.gross) - num(x.net)));
+    });
+    const pts = Object.keys(byGross).map(Number).sort((a, b) => a - b)
+      .map((g) => ({ g, d: byGross[g].reduce((a, v) => a + v, 0) / byGross[g].length }));
+    let d, basis;
+    if (!pts.length) { d = gross * ps.taxPct / 100; basis = 'default'; }
+    else if (pts.length === 1) { d = gross * (pts[0].d / pts[0].g); basis = 'stubs'; }
+    else {
+      basis = 'stubs';
+      const line = [{ g: 0, d: 0 }].concat(pts);
+      let i = 1;
+      while (i < line.length - 1 && gross > line[i].g) i++;
+      const a = line[i - 1], b = line[i];
+      const slope = b.g > a.g ? (b.d - a.d) / (b.g - a.g) : 0;
+      d = gross <= b.g ? a.d + (gross - a.g) * slope : b.d + (gross - b.g) * Math.max(0, Math.min(0.6, slope));
+    }
+    d = round2(Math.max(0, Math.min(gross * 0.6, d)));
+    return { gross, deductions: d, net: round2(gross - d), rate: gross > 0 ? d / gross : 0, basis, stubs: ps.stubs.length };
+  }
+
+  function forDays(state, days, rate) {
+    const r = rate > 0 ? num(rate) : payOf(state).dailyRate;
+    if (!(r > 0)) return null;
+    const n = Math.max(0, num(days));
+    return Object.assign({ days: n, dailyRate: round2(r) }, estimateNet(state, n * r));
+  }
+
+  // Pay periods that end between fromIso and toIso (inclusive), by how often the user is paid.
+  // [{ start, end }] — or null when they can't be worked out yet.
+  function payPeriods(state, fromIso, toIso) {
+    const s = settingsOf(state);
+    const ps = payOf(state);
+    const out = [];
+    const freq = s.payFreq;
+    if (freq === 'semimonthly' || freq === 'monthly') {
+      let [y, m] = parts(fromIso);
+      for (let guard = 0; guard < 60; guard++) {
+        const dim = D.daysInMonth(y, m);
+        const chunks = freq === 'monthly' ? [[1, dim]] : [[1, 15], [16, dim]];
+        chunks.forEach(([a, b]) => {
+          const start = isoOf(y, m, a), end = isoOf(y, m, b);
+          if (end >= fromIso && end <= toIso) out.push({ start, end });
+        });
+        if (isoOf(y, m, dim) >= toIso) break;
+        m++; if (m > 12) { m = 1; y++; }
+      }
+      return out;
+    }
+    if (freq === 'weekly' || freq === 'biweekly') {
+      const len = freq === 'weekly' ? 7 : 14;
+      // Line periods up with the latest paystub (or logged payday): its period ended `lag` days before it.
+      const stubDates = ps.stubs.map((x) => x.date).filter(D.isValid).sort();
+      const pdDates = (state.paydays || []).map((x) => x.date).filter(D.isValid).sort();
+      const ref = stubDates[stubDates.length - 1] || pdDates[pdDates.length - 1];
+      if (!ref) return null;
+      let end = D.addDays(ref, -ps.lag);
+      while (end > fromIso) end = D.addDays(end, -len);
+      for (; end <= toIso; end = D.addDays(end, len)) if (end >= fromIso) out.push({ start: D.addDays(end, -len + 1), end });
+      return out;
+    }
+    if (freq === 'rotation' && hasBoat(s)) {
+      const r = rot(s);
+      let st = rotation.status(s, fromIso);
+      let start = st.where === 'boat' ? st.stretchStart : (st.beforeStart ? s.boatDate : st.changeDate);
+      for (let guard = 0; guard < 40; guard++) {
+        const end = D.addDays(start, r.on - 1);
+        if (end > toIso) break;
+        if (end >= fromIso) out.push({ start, end });
+        start = D.addDays(start, r.cycle);
+      }
+      return out;
+    }
+    return null;
+  }
+
+  // The next n paychecks: each pay period, its payday, days on the boat in it, and the estimate.
+  function upcomingPay(state, today, n) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    const s = settingsOf(state);
+    const ps = payOf(state);
+    const periods = payPeriods(state, D.addDays(today, -ps.lag - 1), D.addDays(today, 400));
+    if (!periods) return { ok: false, reason: s.payFreq ? 'no-anchor' : 'no-freq', list: [] };
+    const list = periods.map((p) => Object.assign(p, { payDate: D.addDays(p.end, ps.lag) }))
+      .filter((p) => p.payDate >= today).slice(0, Math.max(1, n || 6))
+      .map((p) => {
+        const c = rotation.countDays(s, p.start, p.end);
+        const days = hasBoat(s) ? c.boat : null;
+        const est = days == null ? null : forDays(state, days);
+        return { start: p.start, end: p.end, payDate: p.payDate, days, homeDays: hasBoat(s) ? c.home : null, est };
+      });
+    return { ok: true, reason: null, list, dailyRate: ps.dailyRate };
+  }
+
+  // Average take-home per paycheck over the next few months (a fair "normal paycheck").
+  function averagePay(state, today) {
+    const u = upcomingPay(state, today, 12);
+    const ests = u.list.filter((x) => x.est).map((x) => x.est.net);
+    return ests.length ? round2(sum(ests) / ests.length) : null;
+  }
+
+  // A practice run: apply hypothetical paychecks to a copy of the data (following each plan exactly)
+  // and report what the accounts would look like. Nothing is saved.
+  function snapshot(state, date) {
+    const ctx = context(state, date);
+    const sp = spending(state, date, null, ctx.balances);
+    const chk = (accountsList(state, date, ctx.balances).find((a) => a.id === 'checking') || {}).balance;
+    return {
+      date, savings: round2(ctx.savings), totalDebt: round2(ctx.totalDebtNow), stage: ctx.stage, stageName: STAGE_NAMES[ctx.stage],
+      debts: ctx.debts.map((d) => ({ id: d.id, name: d.name, balance: d.balance, open: d.open })),
+      spending: sp.started ? round2(sp.left) : null, checking: chk == null ? null : round2(chk),
+    };
+  }
+  function maxT(state) {
+    let t = 0;
+    const see = (v) => { if (num(v) > t) t = num(v); };
+    (state.paydays || []).forEach((pd) => { see(pd.t); Object.keys(pd.ticks || {}).forEach((k) => see(pd.ticks[k] && pd.ticks[k].t)); });
+    (state.purchases || []).forEach((p) => see(p.t));
+    (state.checkins || []).forEach((c) => see(c.t));
+    return t;
+  }
+  function sandbox(state, today, list, opts) {
+    if (!D.isValid(today)) today = D.todayLocal();
+    const items = (Array.isArray(list) ? list : []).filter((x) => x && num(x.amount) > 0 && D.isValid(x.date))
+      .map((x) => ({ date: x.date, amount: round2(num(x.amount)), nextDate: D.isValid(x.nextDate) ? x.nextDate : null }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    if (!items.length) return { ok: false, error: 'Type an amount to try.' };
+    const copy = JSON.parse(JSON.stringify(state));
+    const before = snapshot(copy, today);
+    let t = maxT(copy) + 1;
+    const steps = [];
+    let last = today;
+    try {
+      items.forEach((it, i) => {
+        const latest = latestPayday(copy);
+        let date = maxIso(it.date, latest ? latest.date : it.date);
+        let nextDate = it.nextDate || (items[i + 1] && items[i + 1].date > date ? items[i + 1].date : pay.guessNext(settingsOf(copy), date));
+        if (!(nextDate > date)) nextDate = pay.guessNext(settingsOf(copy), date);
+        const pd = act.addPayday(copy, { date, amount: it.amount, nextDate }, { d: date, t: t++ }, opts);
+        pd.plan.items.forEach((x) => { if (x.amount > 0) act.tick(copy, pd.id, x.key, true, { d: date, t: t++ }); });
+        steps.push({ date, nextDate, amount: it.amount, plan: pd.plan, after: snapshot(copy, date) });
+        last = maxIso(last, date);
+      });
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || 'That didn\'t work. Try another amount or date.' };
+    }
+    const pBefore = project(state, today), pAfter = project(copy, last);
+    const warnings = steps.filter((x) => x.plan.status !== 'ok')
+      .map((x) => ({ date: x.date, status: x.plan.status, shortBy: x.plan.status === 'short' ? x.plan.shortBy : round2(Math.max(0, x.plan.spend.desired - x.plan.spend.amount)) }));
+    return {
+      ok: true, before, steps, after: steps[steps.length - 1].after,
+      debtFreeBefore: pBefore.debtFree, debtFreeAfter: pAfter.debtFree,
+      safeHarborBefore: pBefore.safeHarbor, safeHarborAfter: pAfter.safeHarbor, warnings,
+    };
+  }
+
   // ---------------------------------------------------------------- terminal additions (§11.5)
 
   // Total of the debts that existed on `date` (a debt added later isn't counted before it was added).
@@ -1817,6 +1996,20 @@
         recapsShown: isObj(mt.recapsShown) ? Object.assign({}, mt.recapsShown) : {},
         tips: isObj(mt.tips) ? Object.assign({}, mt.tips) : {},
       };
+      // Pay setup (§12) — only kept when present.
+      if (isObj(obj.pay)) {
+        const pi = obj.pay;
+        st.pay = {
+          dailyRate: posNumOrNull(pi.dailyRate),
+          lag: intIn(pi.lag, 0, 31, 7),
+          taxPct: pi.taxPct == null || !Number.isFinite(Number(pi.taxPct)) ? null : Math.max(0, Math.min(60, Number(pi.taxPct))),
+          stubs: (Array.isArray(pi.stubs) ? pi.stubs : []).filter((x) => isObj(x) && D.isValid(x.date) && posNumOrNull(x.net) > 0)
+            .map((x) => ({ id: idOf(x.id), date: x.date, days: posNumOrNull(x.days) || 0,
+              gross: posNumOrNull(x.gross) || 0, net: posNumOrNull(x.net) }))
+            .filter((x) => x.gross >= x.net)
+            .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
+        };
+      }
       // Backup bookkeeping (§ backups) — only kept when present, so older data stays exactly as it was.
       if (Number.isFinite(Number(mt.lastBackupT)) && Number(mt.lastBackupT) > 0) st.meta.lastBackupT = Number(mt.lastBackupT);
       if (typeof mt.backupHash === 'string' && mt.backupHash) st.meta.backupHash = mt.backupHash;
@@ -1852,6 +2045,20 @@
   }
 
   // ---------------------------------------------------------------- actions (§4.11)
+
+  function checkStub(state, input) {
+    input = input || {};
+    if (!D.isValid(input.date)) throw new Error('Pick the pay date from the paystub.');
+    const days = Math.max(0, num(input.days));
+    const net = posNumOrNull(input.net);
+    if (!(net > 0)) throw new Error('Type the take-home (net pay) from the paystub.');
+    let gross = posNumOrNull(input.gross);
+    const rate = payOf(state).dailyRate;
+    if (!(gross > 0) && rate && days > 0) gross = round2(days * rate);
+    if (!(gross > 0)) throw new Error('Type the earnings (gross pay) from the paystub.');
+    if (net > gross) throw new Error('Take-home can\'t be more than earnings. Check the two numbers.');
+    return { date: input.date, days: round2(days), gross: round2(gross), net: round2(net) };
+  }
 
   function nowOr(now) {
     return { d: now && D.isValid(now.d) ? now.d : D.todayLocal(), t: now && Number.isFinite(now.t) ? now.t : Date.now() };
@@ -2075,6 +2282,34 @@
       state.meta.backupSnoozeUntil = null;
       return state;
     },
+    // Pay setup (§12). Fields left out stay as they are.
+    setPay(state, fields) {
+      const p = state.pay = isObj(state.pay) ? state.pay : { dailyRate: null, lag: 7, taxPct: null, stubs: [] };
+      if (!Array.isArray(p.stubs)) p.stubs = [];
+      if ('dailyRate' in fields) p.dailyRate = posNumOrNull(fields.dailyRate);
+      if ('lag' in fields) p.lag = intIn(fields.lag, 0, 31, 7);
+      if ('taxPct' in fields) p.taxPct = fields.taxPct == null ? null : Math.max(0, Math.min(60, num(fields.taxPct)));
+      return state;
+    },
+    addPaystub(state, input) {
+      const stub = checkStub(state, input);
+      act.setPay(state, {});
+      stub.id = uid();
+      state.pay.stubs.push(stub);
+      state.pay.stubs.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      return stub;
+    },
+    editPaystub(state, id, input) {
+      const p = isObj(state.pay) && Array.isArray(state.pay.stubs) ? state.pay.stubs.find((x) => x.id === id) : null;
+      if (!p) throw new Error('That paystub isn\'t there anymore.');
+      Object.assign(p, checkStub(state, input));
+      state.pay.stubs.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      return p;
+    },
+    deletePaystub(state, id) {
+      if (isObj(state.pay) && Array.isArray(state.pay.stubs)) state.pay.stubs = state.pay.stubs.filter((x) => x.id !== id);
+      return state;
+    },
     markRecapShown(state, key) { state.meta.recapsShown[key] = true; return state; },
   };
 
@@ -2092,6 +2327,11 @@
     accounts: (state, today) => accountsList(state, today),
     series: (state, today) => series(state, today),
     backupStatus: (state, today) => backupStatus(state, today),
+    paycheck: {
+      settings: payOf, estimate: estimateNet, forDays,
+      periods: payPeriods, upcoming: upcomingPay, average: averagePay,
+    },
+    sandbox: (state, today, list, opts) => sandbox(state, today, list, opts),
     ticker: (state, today) => ticker(state, today),
     streak, milestones, isComplete,
     newState, normalizeState, makeBackup, readBackup,
