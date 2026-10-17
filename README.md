@@ -20,7 +20,8 @@ Everything else (bills, spending money, which debt to pay, savings, your debt-fr
   A purchase put on a credit card is added to that card's balance, and your next payday plan pays it back.
 
 **Optional — the Plan tab:**
-- **Paycheck calculator:** set your daily rate, pick the days on the boat, and see your take-home. Add two or three
+- **Paycheck calculator:** set your daily rate, pick the days on the boat, and see your take-home. Getting a raise or
+  a new rate on your next trip? **+ Add a rate change** and pick the day it starts. Add two or three
   paystubs (pay date, days = "Hours", earnings, take-home) and Harbor learns your real taxes from them.
 - **Upcoming paychecks:** your next six paydays worked out from your rotation, with a heads-up on small ones.
 - **Sandbox:** type any amount (or tap an upcoming paycheck) to see what to do with it and what your accounts would look

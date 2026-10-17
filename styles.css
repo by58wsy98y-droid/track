@@ -1852,7 +1852,7 @@ button.pt-row { cursor: pointer; }
 button.pt-row:active { background: var(--panel-2); }
 .pt-head { min-height: 0; padding: 6px 2px; font-size: 10.5px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase; color: var(--muted); }
 .pt-amt { color: var(--text); font-weight: 700; white-space: nowrap; }
-.pt-amt .tag { margin-left: 4px; font-size: 9.5px; padding: 2px 5px; vertical-align: 1px; }
+.pt-amt .tag { display: block; width: fit-content; margin: 3px 0 0 auto; font-size: 9.5px; padding: 1px 5px; }
 .pt-row .mut { color: var(--muted); }
 .sb-steps .pt-row, .sb-acc .pt-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
 .sb-acc .pt-row > span:first-child { font-family: var(--font); font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }

@@ -1095,12 +1095,30 @@
     return x ? x.est.net : null;
   }
 
+  // Rates: today's, and the one the calculator starts with (your trip now, or the next one when home).
+  function rateNow() { return E.paycheck.rateOn(state, today()); }
+  function tripRateDay() { return E.paycheck.tripStart(state, today()) || today(); }
+  function calcRateDefault() { return E.paycheck.rateOn(state, tripRateDay()) || rateNow(); }
+  function rateBefore(ps, c) {
+    let r = ps.dailyRate;
+    ps.changes.forEach(function (x) { if (x.from < c.from) r = x.rate; });
+    return r;
+  }
+
   function renderPlan() {
     const ps = E.paycheck.settings(state);
     const up = upcomingList(6);
+    const now = rateNow();
+    const inEffect = ps.changes.filter(function (c) { return c.from <= today(); }).pop();
     let h = headHTML('Plan');
     h += '<h2 class="section-title">Pay setup</h2><div class="card group">' +
-      row('payRate', 'Daily rate', ps.dailyRate ? money(ps.dailyRate) + ' / day' : 'Set it', { small: 'What you earn per day on the boat, before taxes', valueCls: ps.dailyRate ? 'is-amt' : 'is-add' }) +
+      row('payRate', 'Daily rate', now ? money(now) + ' / day' : 'Set it', { small: inEffect ? 'Since ' + fdate(inEffect.from) : 'What you earn per day on the boat, before taxes', valueCls: now ? 'is-amt' : 'is-add' }) +
+      ps.changes.map(function (c) {
+        const was = rateBefore(ps, c);
+        return row('editRate', (c.from > today() ? 'New rate from ' : 'Rate change · ') + D.fmtShort(c.from), money(c.rate) + ' / day',
+          { id: c.id, small: was ? 'Was ' + money(was) + ' a day' : null, valueCls: 'is-amt' });
+      }).join('') +
+      row('addRate', '+ Add a rate change', null, { cls: 'add', noChev: true, small: ps.changes.length ? null : 'A raise, or a new rate starting on a trip' }) +
       row('paySchedule', 'Pay schedule', freqLabel(state.settings.payFreq), { small: payLagText(ps), valueCls: state.settings.payFreq ? '' : 'is-add' }) +
       ps.stubs.slice().reverse().map(function (x) {
         return row('editStub', stubLabel(x), money(x.net) + ' take-home', { id: x.id, small: money(x.gross) + ' earned', valueCls: 'is-amt' });
@@ -1130,12 +1148,18 @@
       up.list.map(function (x) {
         const low = x.est && avg && x.est.net < avg * 0.45;
         return '<button type="button" class="pt-row" role="row" data-action="sbPick" data-date="' + esc(x.payDate) + '" data-amt="' + (x.est ? x.est.net : '') + '"' +
-          ' aria-label="' + esc(fdate(x.payDate) + ': ' + plural(x.days, 'day') + ' on the boat' + (x.est ? ', about ' + money(x.est.net) : '') + '. Try it in the sandbox.') + '">' +
+          ' aria-label="' + esc(fdate(x.payDate) + ': ' + plural(x.days, 'day') + ' on the boat' +
+            (x.rates && x.rates.length > 1 ? ' (' + x.rates.map(function (q) { return q.days + ' at ' + money(q.rate); }).join(', ') + ')' : '') +
+            (x.est ? ', about ' + money(x.est.net) : '') + '. Try it in the sandbox.') + '">' +
           '<span role="cell">' + esc(D.fmtShort(x.payDate)) + '</span><span role="cell" class="mut">' + esc(shortRange(x.start, x.end)) + '</span>' +
           '<span role="cell">' + x.days + '</span>' +
-          '<span role="cell" class="pt-amt">' + (x.est ? esc(fig(x.est.net)) : '—') + (low ? ' <span class="tag is-todo">Low</span>' : '') + '</span></button>';
+          '<span role="cell" class="pt-amt">' + (x.est ? esc(fig(x.est.net)) : '—') + (low ? '<span class="tag is-todo">Low</span>' : '') + '</span></button>';
       }).join('') + '</div>';
-    if (!ps.dailyRate) h += '<p class="small-note">Set your daily rate to see the amounts.</p>';
+    const ranged = up.list.length ? ps.changes.filter(function (c) { return c.from <= up.list[up.list.length - 1].end && c.from >= up.list[0].start; }) : [];
+    if (ranged.length) {
+      h += '<p class="small-note">' + esc(ranged.map(function (c) { return 'Days from ' + D.fmtShort(c.from) + ' count at ' + money(c.rate) + ' a day.'; }).join(' ')) + '</p>';
+    }
+    if (!up.list.some(function (x) { return x.est; })) h += '<p class="small-note">Set your daily rate to see the amounts.</p>';
     else {
       h += '<p class="small-note">Tap a paycheck to try it in the sandbox below.</p>';
       if (avg) {
@@ -1161,8 +1185,9 @@
       '<input class="input" id="calc-days" type="text" inputmode="numeric" autocomplete="off" value="' + days + '" data-live="calcDays">' +
       '<button type="button" class="step-btn" data-action="calcStep" data-delta="1" aria-label="One day more">+</button></div></div>' +
       '<label class="field"><span class="field-label">Daily rate</span>' +
-      moneyField('calc-rate', ps.dailyRate, { placeholder: '0' }).replace('<input ', '<input data-live="calcRate" data-change="calcRateSave" ') + '</label></div>' +
-      '<div id="calc-out" aria-live="polite">' + calcOutHTML(days, ps.dailyRate) + '</div></section>';
+      moneyField('calc-rate', calcRateDefault(), { placeholder: '0' }).replace('<input ', '<input data-live="calcRate" ') +
+      '<span class="field-help">Try any rate here. Your saved rates are in Pay setup.</span></label></div>' +
+      '<div id="calc-out" aria-live="polite">' + calcOutHTML(days, calcRateDefault()) + '</div></section>';
   }
   function calcOutHTML(days, rate) {
     const r = E.paycheck.forDays(state, days, rate);
@@ -1171,7 +1196,8 @@
     return '<div class="calc-out">' + kvHTML('Earnings', fig(r.gross), '') +
       kvHTML('Taxes & deductions (' + Math.round(r.rate * 100) + '%)', '−' + fig(r.deductions), 'dn') +
       '<div class="quote calc-take"><span class="lbl">Take-home</span><p class="q-big">' + quoteHTML(r.net) + '</p></div>' +
-      '<p class="small-note">' + esc(r.basis === 'stubs' ? 'Estimated from your ' + plural(r.stubs, 'paystub') + '.'
+      '<p class="small-note">' + esc(r.basis === 'stubs'
+        ? 'Estimated from your ' + plural(r.stubs, 'paystub') + '.' + (r.beyond ? ' This is more than any of them, so the tax part is a best guess until you add a paystub this size.' : '')
         : 'Using ' + ps.taxPct + '% for taxes. Add a paystub above for a sharper number.') + '</p>' +
       '<button type="button" class="btn btn-soft" data-action="sbFromCalc" data-amt="' + r.net + '">Try it in the sandbox</button></div>';
   }
@@ -1299,6 +1325,54 @@
     });
   }
 
+  function openRateSheet(id) {
+    const ps = E.paycheck.settings(state);
+    const c = id ? ps.changes.find(function (y) { return y.id === id; }) : null;
+    if (id && !c) return;
+    const st = E.rotation.status(state.settings, today());
+    const trips = [];
+    if (st) {
+      if (st.where === 'boat') { trips.push(['This trip', st.stretchStart]); trips.push(['Next trip', E.paycheck.tripStart(state, st.changeDate)]); }
+      else { trips.push(['Next trip', st.changeDate]); }
+    }
+    const from = c ? c.from : (trips.length ? trips[0][1] : today());
+    const html = sheetHead(c ? 'Rate change' : 'Add a rate change', domId('rc')) +
+      '<p class="sheet-lead">Days on the boat from this day on are paid at the new rate. Days before it stay at your old rate.</p>' +
+      '<form data-lsubmit novalidate autocomplete="off">' +
+      '<label class="field"><span class="field-label">New daily rate</span>' + moneyField('rc-rate', c ? c.rate : null, { big: true, placeholder: '0' }) + '</label>' +
+      '<label class="field"><span class="field-label">Starts on</span><input class="input" type="date" id="rc-from" value="' + esc(from) + '"></label>' +
+      (trips.length ? '<div class="chips">' + trips.map(function (t) {
+        return '<button type="button" class="chip" data-la="trip" data-v="' + esc(t[1]) + '">' + esc(t[0] + ': ' + D.fmtShort(t[1])) + '</button>';
+      }).join('') + '</div>' : '') +
+      '<div class="sheet-actions' + (c ? ' has-del' : '') + '"><button type="submit" class="btn btn-primary">Save</button>' +
+      (c ? '<button type="button" class="btn btn-danger btn-del" data-la="del" aria-label="Delete this rate change">Delete</button>' : '') + '</div></form>';
+    openLayer(html, {
+      actions: {
+        trip: function (el) { const f = $('rc-from'); if (f) f.value = el.dataset.v; },
+        del: function (el, entry) {
+          confirmBox('Delete this rate change?', money(c.rate) + ' a day from ' + fdate(c.from) + '.', 'Delete it', 'Keep it', true).then(function (yes) {
+            if (!yes) return;
+            E.act.deleteRateChange(state, c.id);
+            save(); closeLayer(entry); render(); toast('Rate change deleted.');
+          });
+        },
+      },
+      onSubmit: function (form, entry) {
+        clearErrors(entry.box);
+        const rate = parseMoney($('rc-rate').value);
+        const day = $('rc-from').value;
+        if (!(rate > 0)) { setError('rc-rate', 'Type the new daily rate, like 300.'); return; }
+        if (!D.isValid(day)) { setError('rc-from', 'Pick the day the new rate starts.'); return; }
+        const input = { from: day, rate: rate };
+        try {
+          if (c) E.act.editRateChange(state, c.id, input); else E.act.addRateChange(state, input);
+        } catch (err) { setError('rc-rate', (err && err.message) || 'Something didn\'t work. Try again.'); return; }
+        save(); closeLayer(entry); render();
+        toast('Saved. Boat days from ' + D.fmtShort(day) + ' on count at ' + money(rate) + ' a day.');
+      },
+    });
+  }
+
   function openStubSheet(id) {
     const ps = E.paycheck.settings(state);
     const x = id ? ps.stubs.find(function (y) { return y.id === id; }) : null;
@@ -1310,7 +1384,7 @@
       '<label class="field"><span class="field-label">Pay date</span><input class="input" type="date" id="st-date" value="' + esc(cur.date) + '"></label>' +
       '<label class="field"><span class="field-label">Days on the boat</span><input class="input" id="st-days" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 15" value="' + esc(cur.days == null ? '' : numStr(cur.days)) + '">' +
       '<span class="field-help">Shown as "Hours" on your pay app.</span></label>' +
-      '<label class="field"><span class="field-label">Earnings (before taxes)</span>' + moneyField('st-gross', cur.gross, { enter: 'next', placeholder: ps.dailyRate ? 'days × ' + numStr(ps.dailyRate) : '0' }) + '</label>' +
+      '<label class="field"><span class="field-label">Earnings (before taxes)</span>' + moneyField('st-gross', cur.gross, { enter: 'next', placeholder: rateNow() ? 'days × rate' : '0' }) + '</label>' +
       '<label class="field"><span class="field-label">Take-home (net pay)</span>' + moneyField('st-net', cur.net) + '</label>' +
       '<div class="sheet-actions' + (x ? ' has-del' : '') + '"><button type="submit" class="btn btn-primary">Save</button>' +
       (x ? '<button type="button" class="btn btn-danger btn-del" data-la="del" aria-label="Delete this paystub">Delete</button>' : '') + '</div></form>';
@@ -1803,7 +1877,7 @@
     h += '<h2 class="section-title">Pay</h2><div class="card group">' +
       row('editPay', 'Normal paycheck', s.payAmount > 0 ? money(s.payAmount) : 'Not set') +
       row('editFreq', 'How often', freqLabel(s.payFreq)) +
-      row('go', 'Daily rate & paystubs', E.paycheck.settings(state).dailyRate ? money(E.paycheck.settings(state).dailyRate) + ' / day' : 'Set up', { small: 'Paycheck calculator and sandbox are under Plan' }).replace('data-action="go"', 'data-action="go" data-to="plan"') + '</div>';
+      row('go', 'Daily rate & paystubs', rateNow() ? money(rateNow()) + ' / day' : 'Set up', { small: 'Paycheck calculator and sandbox are under Plan' }).replace('data-action="go"', 'data-action="go" data-to="plan"') + '</div>';
 
     h += '<h2 class="section-title">Bills</h2><div class="card group">' +
       state.bills.map(function (b) {
@@ -2809,11 +2883,14 @@
     startOver: function () { startOver(); },
     // --- Plan (§12)
     payRate: function () {
-      const ps = E.paycheck.settings(state);
-      openMoneySheet({ title: 'Daily rate', label: 'What you earn per day on the boat, before taxes', value: ps.dailyRate, example: '300', positive: true,
-        help: 'On your pay app it\'s Earnings ÷ Hours.',
-        save: function (n) { E.act.setPay(state, { dailyRate: n }); } });
+      const next = E.paycheck.settings(state).changes.find(function (c) { return c.from > today(); });
+      openMoneySheet({ title: 'Daily rate', label: 'What you earn per day on the boat right now, before taxes', value: rateNow(), example: '300', positive: true,
+        help: 'On your pay app it\'s Earnings ÷ Hours.' + (next ? ' Your new rate from ' + D.fmtShort(next.from) + ' stays as it is.' : ''),
+        more: next ? null : { label: 'My rate is changing', fn: function () { openRateSheet(null); } },
+        save: function (n) { E.act.setCurrentRate(state, today(), n); } });
     },
+    addRate: function () { openRateSheet(null); },
+    editRate: function (el) { openRateSheet(el.dataset.id); },
     paySchedule: function () { openScheduleSheet(); },
     payTax: function () { openTaxSheet(); },
     addStub: function () { openStubSheet(null); },
@@ -2824,7 +2901,7 @@
       const d = $('calc-days'); if (d) d.value = ui.calcDays;
       const rateEl = $('calc-rate');
       const rate = rateEl ? parseMoney(rateEl.value) : null;
-      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : ps.dailyRate);
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : calcRateDefault());
     },
     sbPick: function (el) {
       const amt = Number(el.dataset.amt);
@@ -2886,7 +2963,7 @@
       const ps = E.paycheck.settings(state);
       const rateEl = $('calc-rate');
       const rate = rateEl ? parseMoney(rateEl.value) : null;
-      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : ps.dailyRate);
+      const out = $('calc-out'); if (out) out.innerHTML = calcOutHTML(ui.calcDays, rate > 0 ? rate : calcRateDefault());
     },
     calcRate: function (el) {
       const rate = parseMoney(el.value);
@@ -2902,12 +2979,6 @@
 
   // Change handlers (data-change): fire when a control is let go.
   const CHANGE = {
-    calcRateSave: function (el) {
-      const rate = parseMoney(el.value);
-      if (!(rate > 0) || rate === E.paycheck.settings(state).dailyRate) return;
-      E.act.setPay(state, { dailyRate: rate });
-      save(); render(); toast('Daily rate saved: ' + money(rate) + ' a day.');
-    },
     shareSave: function (el) {
       state.settings.debtShare = Math.round((1 - Number(el.value) / 10) * 10) / 10;
       save();

@@ -794,15 +794,39 @@ async function runPlan(browser, srv, deviceName) {
     assert.equal(await takeHome(), '$1,880.00', '8 days matches the other paystub');
     await page.fill('#calc-rate', '320');
     assert.notEqual(await takeHome(), '$1,880.00', 'live update while typing a rate');
-    assert.equal((await r.state()).pay.dailyRate, 300, 'not saved until you leave the box');
     await page.press('#calc-rate', 'Tab');
     await page.waitForTimeout(150);
-    assert.equal((await r.state()).pay.dailyRate, 320);
-    assert.match(await toastText(), /Daily rate saved/);
-    await page.click('main [data-action=payRate]');
-    await page.fill('#m-val', '300');
-    await submitLayer();
+    assert.equal((await r.state()).pay.dailyRate, 300, 'the calculator is a what-if: it never saves');
     await r.noSideScroll('plan on ' + deviceName);
+
+    // ------------------------------------------------------------ 3b. a new rate from the next trip
+    await page.click('main [data-action=addRate]');
+    await page.waitForSelector('#rc-from');
+    assert.equal(await page.inputValue('#rc-from'), '2026-10-20', 'starts on the next trip');
+    assert.match(await page.textContent('.layer .chips'), /Next trip: Oct 20/);
+    await page.click('.layer button[type=submit]');
+    assert.match(await page.textContent('.layer'), /Type the new daily rate/);
+    await page.fill('#rc-rate', '450');
+    await submitLayer();
+    assert.match(await toastText(), /from Oct 20 on count at \$450 a day/);
+    st = await r.state();
+    assert.deepEqual(st.pay.changes.map((c) => [c.from, c.rate]), [['2026-10-20', 450]]);
+    assert.equal(st.pay.dailyRate, 300, 'today\'s rate is unchanged');
+    assert.match(await page.textContent('main'), /New rate from Oct 20/);
+    assert.match(await page.textContent('main'), /Days from Oct 20 count at \$450 a day/);
+    const nov7 = await page.evaluate(() => window.Engine.paycheck.upcoming(window.Harbor.state, '2026-10-17', 2).list[1]);
+    assert.equal(nov7.est.gross, 12 * 450, 'Oct 16–31: 12 boat days, all at the new rate');
+    const nov7Cell = await page.$$eval('button.pt-row', (els) => els[1].querySelector('.pt-amt').textContent);
+    assert.equal(Number(nov7Cell.replace(/[^\d.]/g, '')), nov7.est.net);
+    assert.equal(await page.inputValue('#calc-rate'), '450', 'the calculator starts at the next trip\'s rate');
+    await page.click('main [data-action=payRate]');
+    assert.equal(await page.inputValue('#m-val'), '300', 'Daily rate edits today\'s rate');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.layer', { state: 'detached' });
+    await page.click('main [data-action=editRate]');
+    await page.fill('#rc-rate', '400');
+    await submitLayer();
+    assert.deepEqual((await r.state()).pay.changes.map((c) => [c.from, c.rate]), [['2026-10-20', 400]]);
 
     // ------------------------------------------------------------ 4. sandbox (never saves)
     const before = JSON.stringify(await r.state());

@@ -2319,6 +2319,58 @@ test('§12 upcoming paychecks count boat days from the rotation', () => {
   assert.equal(E.paycheck.upcoming(nr, '2026-10-17', 2).list[0].est, null, 'no daily rate: periods but no estimate');
 });
 
+test('§12 rate changes: each boat day is paid at the rate in effect that day', () => {
+  const s = payState();                                     // $300/day; boat Sep 8 – Oct 5, home Oct 6 – 19, boat Oct 20 – Nov 16
+  assert.equal(E.paycheck.tripStart(s, '2026-10-17'), '2026-10-20', 'home: the next trip');
+  assert.equal(E.paycheck.tripStart(s, '2026-10-25'), '2026-10-20', 'on the boat: this trip');
+  assert.equal(E.paycheck.tripStart(base({ settings: { boatDate: null } }), '2026-10-17'), null);
+  E.act.addRateChange(s, { from: '2026-10-20', rate: 450 });
+  assert.deepEqual([E.paycheck.rateOn(s, '2026-10-19'), E.paycheck.rateOn(s, '2026-10-20')], [300, 450]);
+  let u = E.paycheck.upcoming(s, '2026-10-17', 3);
+  assert.deepEqual(u.list.map((x) => x.est.gross), [1500, 12 * 450, 15 * 450]);
+  assert.deepEqual(u.list[0].rates, [{ days: 5, rate: 300 }]);
+  assert.equal(u.dailyRate, 300, 'rate for today');
+  // A period that straddles the change: Oct 16–31 with the change on Oct 25 → 5 days at 300, 7 at 450.
+  E.act.editRateChange(s, s.pay.changes[0].id, { from: '2026-10-25', rate: 450 });
+  const mid = E.paycheck.upcoming(s, '2026-10-17', 2).list[1];
+  assert.deepEqual(mid.rates, [{ days: 5, rate: 300 }, { days: 7, rate: 450 }]);
+  assert.equal(mid.est.gross, 5 * 300 + 7 * 450);
+  assert.equal(mid.est.dailyRate, null, 'mixed rates');
+  // One change per start day; editing "the daily rate" changes the rate in effect that day.
+  E.act.addRateChange(s, { from: '2026-10-25', rate: 500 });
+  assert.equal(s.pay.changes.length, 1);
+  assert.equal(E.paycheck.rateOn(s, '2026-11-01'), 500);
+  E.act.setCurrentRate(s, '2026-10-17', 310);
+  assert.deepEqual([s.pay.dailyRate, s.pay.changes[0].rate], [310, 500], 'before the change: edits the base rate');
+  E.act.setCurrentRate(s, '2026-11-01', 520);
+  assert.deepEqual([s.pay.dailyRate, s.pay.changes[0].rate], [310, 520], 'after it: edits the change');
+  assert.throws(() => E.act.setCurrentRate(s, '2026-11-01', 0), /daily rate/);
+  // Paystub earnings default to the rate when that pay period ended (pay date − lag).
+  const stub = E.act.addPaystub(s, { date: '2026-11-07', days: 12, net: 4000 });
+  assert.equal(stub.gross, 12 * 520);
+  assert.equal(E.paycheck.estimate(s, 7000).beyond, true, 'above every paystub');
+  assert.equal(E.paycheck.estimate(s, 6000).beyond, false);
+  assert.throws(() => E.act.addRateChange(s, { from: 'nope', rate: 400 }), /day the new rate starts/);
+  assert.throws(() => E.act.addRateChange(s, { from: '2026-12-01', rate: 0 }), /new daily rate/);
+  assert.throws(() => E.act.editRateChange(s, 'missing', { from: '2026-12-01', rate: 400 }), /gone/);
+  E.act.deleteRateChange(s, s.pay.changes[0].id);
+  assert.equal(E.paycheck.rateOn(s, '2026-11-01'), 310);
+  // Survives backup/restore; junk is dropped; old data without changes gets no `changes` key.
+  E.act.addRateChange(s, { from: '2026-10-20', rate: 450 });
+  const back = E.readBackup(JSON.stringify(E.makeBackup(s, '2026-10-18')), '2026-10-18');
+  assert.deepEqual(back.state.pay.changes, s.pay.changes);
+  const bad = JSON.parse(JSON.stringify(s));
+  bad.pay.changes.push({ from: 'x', rate: 5 }, { from: '2026-12-01', rate: -1 }, 'junk');
+  assert.equal(E.normalizeState(bad, '2026-10-18').state.pay.changes.length, 1);
+  assert.equal('changes' in E.normalizeState(JSON.parse(JSON.stringify(payState())), '2026-10-18').state.pay, false);
+  // A rate change with no base rate: no estimate for days before it, estimates after.
+  const nb = base({ settings: { payFreq: 'semimonthly' } });
+  E.act.addRateChange(nb, { from: '2026-10-20', rate: 400 });
+  u = E.paycheck.upcoming(nb, '2026-10-17', 2);
+  assert.equal(u.list[0].est, null, 'Oct 1–15 has boat days with no rate');
+  assert.equal(u.list[1].est.gross, 12 * 400);
+});
+
 test('§12 sandbox: a practice run on a copy — plans, balances after, warnings, nothing saved', () => {
   const s = payState();
   const before = JSON.stringify(s);

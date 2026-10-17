@@ -755,18 +755,27 @@ F4 PROGRESS · F5 SETTINGS. Everything optional; old data without `state.pay` be
 - `state.pay = { dailyRate, lag, taxPct, stubs: [{ id, date, days, gross, net }] }`, created on first edit.
   `lag` = days from the end of a pay period to payday (default 7). `taxPct` (default 20, max 60) is used only with no stubs.
   A stub's `gross` defaults to days × dailyRate; `net` must be > 0 and ≤ gross. Stubs are kept sorted by date.
-- `normalizeState` / backups keep `pay` only when present; invalid stubs are dropped.
+- **Rate changes:** `state.pay.changes = [{ id, from, rate }]` (key only present once used; one per start day, sorted).
+  `dailyRate` applies before the first change; each change applies from its `from` day on. A pay period that straddles a
+  change is split: each boat day is paid at the rate in effect that day. A stub's default gross uses the rate in effect
+  on its pay date − lag.
+- `normalizeState` / backups keep `pay` only when present; invalid stubs and rate changes are dropped.
 
 ### 12.2 Engine (`Engine.paycheck`, `Engine.sandbox`)
 - `estimate(state, gross)` → `{ gross, deductions, net, rate, basis: 'stubs'|'default', stubs }`. With stubs:
   deductions are piecewise-linear through (0, 0) and each stub's (gross, gross − net), extended past the largest stub
   with the last slope (capped at 0.6); always capped at 60% of gross. A gross equal to a stub's reproduces it exactly.
-- `forDays(state, days, rate?)` → estimate for days × rate, or null with no rate.
+- `forDays(state, days, rate?)` → estimate for days × rate, or null with no rate. `estimate().beyond` = above every paystub.
+- `rateOn(state, day)` → the rate in effect that day. `tripStart(state, today)` → first day of the current trip (on the
+  boat) or the next one (home). `periodGross(state, start, end)` → `{ days, gross, parts: [{ from, to, days, rate }] }`.
+- Acts: `setCurrentRate(state, today, rate)` edits the change in effect today, else the base rate;
+  `addRateChange` / `editRateChange` / `deleteRateChange`.
 - `periods(state, from, to)` → pay periods: twice a month = 1st–15th and 16th–month end; monthly = calendar month;
   weekly / every 2 weeks anchored on the latest stub or payday date − lag; once per rotation = each boat stretch;
   "it varies" → null.
 - `upcoming(state, today, n)` → `{ ok, reason: 'no-freq'|'no-anchor'|null, list: [{ start, end, payDate, days,
-  homeDays, est }] }` where payDate = period end + lag and days = boat days in the period (rotation.countDays).
+  homeDays, est, rates: [{ days, rate }] }] }` where payDate = period end + lag, days = boat days in the period
+  (rotation.countDays) and the estimate pays each day at its own rate.
 - `average(state, today)` → mean estimated take-home of the next 12 paychecks.
 - `sandbox(state, today, [{ date, amount }])` → deep-copies the data, adds each paycheck and ticks every plan item,
   then reports `{ before, steps: [{ date, amount, plan, after }], after, debtFreeBefore/After, safeHarborBefore/After,
@@ -774,12 +783,15 @@ F4 PROGRESS · F5 SETTINGS. Everything optional; old data without `state.pay` be
   Dates before the latest real payday are refused. Nothing is saved.
 
 ### 12.3 Screen
-- **Pay setup:** Daily rate · Pay schedule (how often + "payday about N days after each pay period ends") · paystubs
+- **Pay setup:** Daily rate (today's rate) · a row per rate change ("New rate from Oct 20 · was $300 a day") ·
+  + Add a rate change (sheet: new daily rate, starts on, This trip / Next trip chips, Delete beside Save) · Pay schedule (how often + "payday about N days after each pay period ends") · paystubs
   (newest first, tap to edit/delete; Delete sits beside Save) · + Add a paystub · "Taxes for now" (only with no stubs).
 - **Upcoming paychecks:** PAYDAY · PERIOD · DAYS · TAKE-HOME (6 rows, skipping a payday already logged), LOW tag under
   45% of the average. Tap a row → runs it in the sandbox. Average + "Use $X as my normal paycheck".
-- **Paycheck calculator:** days stepper (0–31) + daily rate (live while typing, saved on leaving the box). Shows
-  earnings, taxes & deductions (with %), big green take-home, basis note, "Try it in the sandbox".
+- **Paycheck calculator:** days stepper (0–31) + daily rate (a what-if, never saved; starts at the rate for your current
+  or next trip). Shows
+  earnings, taxes & deductions (with %), big green take-home, basis note (plus "a best guess" when above every
+  paystub), "Try it in the sandbox". Upcoming paychecks add "Days from Oct 20 count at $X a day".
 - **Sandbox:** amount + date, Run it, "Next 3 paychecks". Single run: plan headline, split bar, the to-do items.
   Multi: payday-by-payday table (take-home, saved after, owe after). Both: accounts NOW · AFTER · CHANGE, debt-free
   target before → after, a heads-up for any short (or ≥ $50 tight) paycheck: "keep about $X extra in checking from the

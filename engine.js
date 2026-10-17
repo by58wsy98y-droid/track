@@ -1565,8 +1565,18 @@
 
 
   // ---------------------------------------------------------------- paycheck calculator + sandbox (§12)
-  // Pay setup lives in its own optional object, state.pay = { dailyRate, lag, taxPct, stubs: [...] },
+  // Pay setup lives in its own optional object, state.pay = { dailyRate, lag, taxPct, stubs: [...], changes?: [...] },
   // so older data (and backups) stay exactly as they were until the user sets it up.
+  // `changes` = rate changes (a raise, or a new rate from a given trip): [{ id, from, rate }]. dailyRate applies
+  // before the first change; each change applies from its `from` day on.
+
+  function rateChangesOf(p) {
+    const byDay = {};
+    (Array.isArray(p.changes) ? p.changes : []).forEach((c) => {
+      if (isObj(c) && D.isValid(c.from) && num(c.rate) > 0) byDay[c.from] = { id: c.id, from: c.from, rate: round2(num(c.rate)) };
+    });
+    return Object.keys(byDay).sort().map((k) => byDay[k]);
+  }
 
   function payOf(state) {
     const p = isObj(state.pay) ? state.pay : {};
@@ -1575,7 +1585,40 @@
       lag: intIn(p.lag, 0, 31, 7),                     // payday ≈ this many days after a pay period ends
       taxPct: p.taxPct == null || !(num(p.taxPct) >= 0) ? 20 : Math.min(60, num(p.taxPct)),
       stubs: Array.isArray(p.stubs) ? p.stubs.filter((x) => isObj(x) && num(x.gross) > 0 && num(x.net) > 0 && num(x.net) <= num(x.gross)) : [],
+      changes: rateChangesOf(p),
     };
+  }
+
+  // The daily rate in effect on a day (null when none is set for it yet).
+  function rateOn(state, iso) {
+    const ps = payOf(state);
+    let r = ps.dailyRate;
+    ps.changes.forEach((c) => { if (c.from <= iso) r = c.rate; });
+    return r;
+  }
+
+  // First day of the trip you're on, or of the next one when you're home (null with no boat date).
+  function tripStart(state, today) {
+    const st = rotation.status(settingsOf(state), today);
+    if (!st) return null;
+    return st.where === 'boat' ? st.stretchStart : st.changeDate;
+  }
+
+  // Gross pay for the boat days in [start, end], each day paid at the rate in effect that day.
+  // { days, gross (null when a rate is missing), parts: [{ from, to, days, rate }] }
+  function periodGross(state, start, end) {
+    const s = settingsOf(state);
+    const cuts = payOf(state).changes.map((c) => c.from).filter((d) => d > start && d <= end);
+    const parts = [];
+    let a = start;
+    cuts.concat([D.addDays(end, 1)]).forEach((next) => {
+      const z = D.addDays(next, -1);
+      if (z >= a) parts.push({ from: a, to: z, days: rotation.countDays(s, a, z).boat, rate: rateOn(state, a) });
+      a = next;
+    });
+    const days = parts.reduce((t, x) => t + x.days, 0);
+    const missing = parts.some((x) => x.days > 0 && !(x.rate > 0)) || (days === 0 && !(rateOn(state, end) > 0));
+    return { days, gross: missing ? null : round2(parts.reduce((t, x) => t + x.days * (x.rate || 0), 0)), parts: parts.filter((x) => x.days > 0) };
   }
 
   // Taxes and deductions for a gross amount, learned from the user's own paystubs:
@@ -1604,7 +1647,8 @@
       d = gross <= b.g ? a.d + (gross - a.g) * slope : b.d + (gross - b.g) * Math.max(0, Math.min(0.6, slope));
     }
     d = round2(Math.max(0, Math.min(gross * 0.6, d)));
-    return { gross, deductions: d, net: round2(gross - d), rate: gross > 0 ? d / gross : 0, basis, stubs: ps.stubs.length };
+    const beyond = pts.length > 0 && gross > pts[pts.length - 1].g + 0.005;   // above every paystub: the tax part is a stretch
+    return { gross, deductions: d, net: round2(gross - d), rate: gross > 0 ? d / gross : 0, basis, stubs: ps.stubs.length, beyond };
   }
 
   function forDays(state, days, rate) {
@@ -1674,10 +1718,15 @@
       .map((p) => {
         const c = rotation.countDays(s, p.start, p.end);
         const days = hasBoat(s) ? c.boat : null;
-        const est = days == null ? null : forDays(state, days);
-        return { start: p.start, end: p.end, payDate: p.payDate, days, homeDays: hasBoat(s) ? c.home : null, est };
+        let est = null, rates = null;
+        if (days != null) {
+          const g = periodGross(state, p.start, p.end);
+          rates = g.parts.map((x) => ({ days: x.days, rate: x.rate }));
+          if (g.gross != null) est = Object.assign({ days, dailyRate: rates.length === 1 ? rates[0].rate : null }, estimateNet(state, g.gross));
+        }
+        return { start: p.start, end: p.end, payDate: p.payDate, days, homeDays: hasBoat(s) ? c.home : null, est, rates };
       });
-    return { ok: true, reason: null, list, dailyRate: ps.dailyRate };
+    return { ok: true, reason: null, list, dailyRate: rateOn(state, today) };
   }
 
   // Average take-home per paycheck over the next few months (a fair "normal paycheck").
@@ -2009,6 +2058,7 @@
             .filter((x) => x.gross >= x.net)
             .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
         };
+        if (Array.isArray(pi.changes)) st.pay.changes = rateChangesOf(pi).map((c) => ({ id: idOf(c.id), from: c.from, rate: c.rate }));
       }
       // Backup bookkeeping (§ backups) — only kept when present, so older data stays exactly as it was.
       if (Number.isFinite(Number(mt.lastBackupT)) && Number(mt.lastBackupT) > 0) st.meta.lastBackupT = Number(mt.lastBackupT);
@@ -2053,12 +2103,21 @@
     const net = posNumOrNull(input.net);
     if (!(net > 0)) throw new Error('Type the take-home (net pay) from the paystub.');
     let gross = posNumOrNull(input.gross);
-    const rate = payOf(state).dailyRate;
+    const rate = rateOn(state, D.addDays(input.date, -payOf(state).lag));
     if (!(gross > 0) && rate && days > 0) gross = round2(days * rate);
     if (!(gross > 0)) throw new Error('Type the earnings (gross pay) from the paystub.');
     if (net > gross) throw new Error('Take-home can\'t be more than earnings. Check the two numbers.');
     return { date: input.date, days: round2(days), gross: round2(gross), net: round2(net) };
   }
+
+  function checkRate(input) {
+    input = input || {};
+    if (!D.isValid(input.from)) throw new Error('Pick the day the new rate starts.');
+    const rate = posNumOrNull(input.rate);
+    if (!(rate > 0)) throw new Error('Type the new daily rate, like 300.');
+    return { from: input.from, rate: round2(rate) };
+  }
+  function sortChanges(p) { p.changes.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0)); }
 
   function nowOr(now) {
     return { d: now && D.isValid(now.d) ? now.d : D.todayLocal(), t: now && Number.isFinite(now.t) ? now.t : Date.now() };
@@ -2291,6 +2350,42 @@
       if ('taxPct' in fields) p.taxPct = fields.taxPct == null ? null : Math.max(0, Math.min(60, num(fields.taxPct)));
       return state;
     },
+    // The rate for today: edits the rate change already in effect, else the base daily rate.
+    setCurrentRate(state, today, rate) {
+      const r = posNumOrNull(rate);
+      if (!(r > 0)) throw new Error('Type your daily rate, like 300.');
+      act.setPay(state, {});
+      const p = state.pay;
+      const cur = (Array.isArray(p.changes) ? p.changes : []).filter((c) => isObj(c) && D.isValid(c.from) && c.from <= today)
+        .sort((a, b) => (a.from < b.from ? -1 : 1)).pop();
+      if (cur) cur.rate = round2(r); else p.dailyRate = round2(r);
+      return state;
+    },
+    // Rate changes (a raise, or a new rate from a given trip). One per start day: a second one replaces the first.
+    addRateChange(state, input) {
+      const c = checkRate(input);
+      act.setPay(state, {});
+      const p = state.pay;
+      p.changes = (Array.isArray(p.changes) ? p.changes : []).filter((x) => isObj(x) && x.from !== c.from);
+      c.id = uid();
+      p.changes.push(c);
+      sortChanges(p);
+      return c;
+    },
+    editRateChange(state, id, input) {
+      const p = isObj(state.pay) ? state.pay : null;
+      const x = p && Array.isArray(p.changes) ? p.changes.find((y) => isObj(y) && y.id === id) : null;
+      if (!x) throw new Error('That rate change is gone. Close this and try again.');
+      const c = checkRate(input);
+      p.changes = p.changes.filter((y) => y === x || !(isObj(y) && y.from === c.from));
+      Object.assign(x, c);
+      sortChanges(p);
+      return x;
+    },
+    deleteRateChange(state, id) {
+      if (isObj(state.pay) && Array.isArray(state.pay.changes)) state.pay.changes = state.pay.changes.filter((x) => !(isObj(x) && x.id === id));
+      return state;
+    },
     addPaystub(state, input) {
       const stub = checkStub(state, input);
       act.setPay(state, {});
@@ -2328,7 +2423,7 @@
     series: (state, today) => series(state, today),
     backupStatus: (state, today) => backupStatus(state, today),
     paycheck: {
-      settings: payOf, estimate: estimateNet, forDays,
+      settings: payOf, estimate: estimateNet, forDays, rateOn, tripStart, periodGross,
       periods: payPeriods, upcoming: upcomingPay, average: averagePay,
     },
     sandbox: (state, today, list, opts) => sandbox(state, today, list, opts),
